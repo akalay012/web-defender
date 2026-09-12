@@ -1,0 +1,21 @@
+"""Canonical scan pipeline order."""
+PIPELINE=(
+ "url_intelligence",
+ "initial_http",
+ "html_javascript",
+ "rendered_dom",
+ "non_executing_interaction_paths",
+ "runtime_observation",
+ "canonical_evidence_guards",
+ "independent_family_experts",
+ "single_fusion",
+ "single_decision_authority",
+ "presentation",
+)
+INVARIANTS=(
+ "sensors_never_own_final_verdict",
+ "guards_run_before_expert_voting",
+ "experts_do_not_consume_other_expert_results_as_evidence",
+ "final_decision_is_single_source_of_truth",
+ "presentation_never_recalculates_scores",
+)
