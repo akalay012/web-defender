@@ -1,6 +1,6 @@
 """Dependency-neutral application metadata."""
 APP_NAME = "Web Defender"
-APP_VERSION = "V34.6.2"
+APP_VERSION = "V34.7.9"
 
 import os
 RUNNING_ON_PYTHONANYWHERE = bool(os.getenv("PYTHONANYWHERE_SITE") or os.getenv("PYTHONANYWHERE_DOMAIN"))

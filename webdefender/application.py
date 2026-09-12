@@ -24,9 +24,7 @@ def start_optional_workers():
             threading.Thread(target=_ti_loop,name="threat-intel-sync",daemon=True).start()
         except Exception:
             pass
+    # V34.7.9: autonomous discovery is no longer allowed inside Gunicorn.
+    # It must run as `python -m webdefender.discovery_service` with shared PostgreSQL.
     if os.getenv("WEB_DEFENDER_DISCOVERY_WORKER","0").lower() in ("1","true","yes","on"):
-        try:
-            from .discovery_worker import start_discovery_worker
-            start_discovery_worker()
-        except Exception:
-            pass
+        print("[DISCOVERY] WEB_DEFENDER_DISCOVERY_WORKER is deprecated/ignored in web process; use the standalone discovery service.",flush=True)
