@@ -300,6 +300,7 @@ class ScanOrchestratorMixin:
         self.run_check("access_restricted_guard_v3232", self.access_restricted_evidence_guard_v3232)
         self.run_check("feed_off_guard_v3231", self.feed_off_regression_guard_v3231)
         self.run_check("canonical_evidence_v322", self.rebuild_scoring_evidence_v322)
+        self.run_check("novel_behavior_chains_v345", self.run_novel_behavior_chains_v345)
         self.run_check("zero_day_behavior_v32", self.run_zero_day_behavior_v32)
         self.run_check("evidence_bus_v3236", self.build_evidence_bus_v3236)
         self.run_check("causal_destination_graph_v3238", self.causal_destination_ownership_graph_v3238)
@@ -390,6 +391,133 @@ class ScanOrchestratorMixin:
         self.results["non_executing_interaction_v324"]=report
         return report
 
+    def novel_behavior_chains_v345(self):
+        """Bounded zero-day chain detector over raw HTTP/browser/JS observations only.
+
+        It detects attack-shaped causal combinations, not site names or reputation.
+        Observation != intent: weak/context-only chains cannot become hard evidence.
+        """
+        browser=self.results.get("browser") or {}
+        http=self.results.get("http") or {}
+        net=self.results.get("network_behavior_v22") or {}
+        js=self.results.get("js_payload_v23") or {}
+        dataflow=self.results.get("javascript_dataflow") or {}
+        interaction=self.results.get("non_executing_interaction_v324") or {}
+        diff=self.results.get("differential_observation_v32331") or {}
+
+        def root_of(value):
+            try: return registrable_domain_v21(urlparse(str(value or "")).hostname or "")
+            except Exception: return ""
+        page_root=root_of(browser.get("final_url") or http.get("final_url") or
+                          self.results.get("final_url") or self.results.get("analyzed_url"))
+        sem=browser.get("semantic_dom") or {}
+        inputs=sem.get("inputs") or []
+        forms=sem.get("forms") or browser.get("forms") or []
+        hooks=browser.get("runtime_hooks") or {}
+        events=net.get("events") or []
+        scripts=browser.get("script_signals") or {}
+
+        sensitive_types=("password","otp","one-time","cvv","cvc","card","pin","seed","secret")
+        sensitive_ui=False
+        for item in inputs:
+            text=json.dumps(item,ensure_ascii=False,default=str).lower()
+            if any(k in text for k in sensitive_types):
+                sensitive_ui=True; break
+
+        # Concrete observed writes to an unrelated registrable domain.
+        external_writes=[]
+        for e in events:
+            if not isinstance(e,dict) or not e.get("has_body"): continue
+            dest=root_of(e.get("url"))
+            if dest and page_root and dest != page_root:
+                external_writes.append({"kind":e.get("kind"),"url":str(e.get("url") or "")[:500],
+                                        "destination_root":dest,"observed":True})
+
+        # Proven static paths come only from the non-executing analyzer's explicit proven set.
+        proven_paths=[]
+        for p in (interaction.get("proven_paths") or interaction.get("proven") or []):
+            if not isinstance(p,dict): continue
+            text=json.dumps(p,ensure_ascii=False,default=str).lower()
+            if any(k in text for k in sensitive_types) and any(
+                k in text for k in ("external","cross-origin","cross_origin","unrelated","sink_host","destination_host")):
+                proven_paths.append(p)
+
+        # Runtime destination changes are useful for staged behavior but are not exfil proof alone.
+        destinations=[]
+        for bucket in ("fetches","xhr","beacons","form_submits"):
+            for e in hooks.get(bucket) or []:
+                if not isinstance(e,dict): continue
+                u=e.get("url") or e.get("action")
+                rr=root_of(u)
+                if rr and page_root and rr != page_root:
+                    destinations.append({"kind":bucket,"root":rr,"has_body":bool(e.get("has_body"))})
+
+        script_blob=json.dumps(scripts,ensure_ascii=False,default=str).lower()
+        js_blob=json.dumps(js,ensure_ascii=False,default=str).lower()
+        dynamic=any(k in script_blob+" "+js_blob for k in ("eval_like","new function","eval("))
+        decoder=any(k in script_blob+" "+js_blob for k in ("decoder_like","atob(","fromcharcode","decodeuricomponent"))
+        anti=any(k in script_blob for k in ("webdriver","devtools","debugger","anti-analysis","anti_analysis"))
+        conditional=bool(diff.get("conditional_delivery_signal"))
+        mutations=browser.get("dom_mutations") or {}
+        staged_dom=bool(mutations) and any(k in json.dumps(mutations,default=str).lower()
+                                           for k in ("form","input","password","iframe"))
+        downloads=browser.get("downloads") or self.results.get("downloads") or []
+        if not isinstance(downloads,list): downloads=[]
+
+        chains=[]
+        def add(chain_id,family,level,confidence,components,reason,hard=False):
+            chains.append({"chain_id":chain_id,"family":family,"level":level,
+                "confidence":round(float(confidence),3),"components":components,
+                "reason":reason,"hard_evidence":bool(hard)})
+
+        if sensitive_ui and external_writes:
+            add("sensitive_ui_to_observed_external_write","credential_theft","observed",.985,
+                ["sensitive_ui","runtime_body_write","unrelated_registrable_domain"],
+                "Hassas giriş yüzeyi ile unrelated domaine gövdeli runtime yazma aynı pasif yüklemede gözlendi.",True)
+        elif proven_paths:
+            add("static_sensitive_source_to_external_sink","credential_theft","proven_static",.965,
+                ["sensitive_source","bounded_static_path","explicit_external_sink"],
+                "Kod yürütmeden hassas source → açık unrelated sink yolu kanıtlandı.",True)
+
+        if anti and conditional:
+            add("anti_analysis_conditional_delivery","cloaking","observed",.93,
+                ["anti_analysis","http_browser_delivery_difference"],
+                "Anti-analysis kodu ve koşullu içerik ayrışması bağımsız yüzeylerde birlikte gözlendi.")
+        if dynamic and decoder and anti and destinations:
+            add("obfuscated_staged_external_channel","suspicious_script","corroborated",.91,
+                ["dynamic_code","decoder_chain","anti_analysis","external_runtime_destination"],
+                "Dinamik kod + decoder + anti-analysis + harici runtime hedefi birlikte gözlendi.")
+        if staged_dom and sensitive_ui and destinations:
+            add("staged_sensitive_surface_external_channel","credential_theft","corroborated",.90,
+                ["dom_mutation","sensitive_ui","external_runtime_destination"],
+                "Çalışma sırasında oluşan hassas yüzey harici kanal bağlamıyla korele edildi.")
+        if downloads and dynamic and decoder:
+            add("dynamic_decoder_with_observed_download","malware","corroborated",.90,
+                ["observed_download","dynamic_code","decoder_chain"],
+                "Somut indirme artefaktı dinamik/decoder JavaScript davranışıyla korele edildi.")
+
+        # Potential paths are diagnostics only and never vote.
+        potential=[]
+        if sensitive_ui and destinations and not external_writes and not proven_paths:
+            potential.append({"chain_id":"sensitive_ui_external_channel_potential",
+                "reason":"Hassas yüzey ve harici kanal var; source→sink nedenselliği kanıtlanmadı.",
+                "vote_eligible":False})
+
+        # Families/groups are deduped here. This object is a raw-behavior expert output,
+        # not a finding and cannot count twice merely because another summary repeats it.
+        vote_groups=sorted({c["chain_id"] for c in chains})
+        hard=any(c["hard_evidence"] for c in chains)
+        return {"page_root":page_root,"chains":chains,"potential_paths":potential,
+                "independent_chain_groups":vote_groups,"hard_causal_evidence":hard,
+                "observed_external_writes":external_writes[:20],
+                "proven_static_paths":proven_paths[:12],
+                "policy":"Observed/proven causal chains may vote; potential paths are context-only. Reputation/feed/site-name rules are not inputs."}
+
+    def run_novel_behavior_chains_v345(self):
+        report=self.novel_behavior_chains_v345()
+        self.results["novel_behavior_chains_v345"]=report
+        return report
+
     def _zero_day_behavior_v32(self):
         """Novel-threat behavioral inference. It never requires a reputation/IOC hit."""
         browser=self.results.get("browser") or {}
@@ -414,6 +542,20 @@ class ScanOrchestratorMixin:
         def ev(group,family,weight,title,detail,confidence=.8):
             evidence.append({"group":group,"family":family,"weight":float(weight),
                              "title":title,"detail":detail,"confidence":float(confidence)})
+
+        # V34.5: consume canonical raw-behavior chain expert output exactly once.
+        # Derived findings are still excluded, so this cannot create recursive evidence.
+        novel=self.results.get("novel_behavior_chains_v345") or {}
+        for c in novel.get("chains") or []:
+            if not isinstance(c,dict): continue
+            cid=str(c.get("chain_id") or "")
+            family=str(c.get("family") or "behavior")
+            conf=float(c.get("confidence") or 0)
+            # Strong causal chains receive meaningful weight. Corroborated context stays bounded.
+            weight=30 if c.get("hard_evidence") else 16
+            ev("novel_chain:"+cid,family,weight,
+               "V34.5 davranış zinciri: "+cid,
+               str(c.get("reason") or "")[:800],conf)
 
         # 1) Credential-flow behavior.
         sensitive=any(x in btxt for x in ["password","passwd","otp","one-time","verification code",
