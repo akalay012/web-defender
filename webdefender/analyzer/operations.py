@@ -577,8 +577,8 @@ class OperationalLearningMixin:
                 "priority":72,"timeout":15,"max_bytes":2097152,"category":"phishing"
             }),
             ("PhishTank Online Valid","url_feed","verified_external",{
-                "url":"https://data.phishtank.com/data/online-valid.json",
-                "format":"json","max_items":80,"queue_target":20,"interval_minutes":360,
+                "url":"https://data.phishtank.com/data/online-valid.csv",
+                "format":"csv","url_column":1,"max_items":80,"queue_target":20,"interval_minutes":360,
                 "priority":72,"timeout":20,"max_bytes":8388608,"category":"phishing",
                 "items_key":"urls","url_key":"url","top_level_list":True
             }),

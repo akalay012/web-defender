@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 from ..state import LEARNING_ENGINE, THREAT_INTEL_STORE
 
 class AnalyzerBase:
-    def __init__(self):
+    def __init__(self, url=None, feed_off=False):
+        self.feed_off_v3231 = bool(feed_off)
+        self.initial_url = str(url or "").strip()
         self.results = {
             "analyzed_url": "",
             "final_url": "",
