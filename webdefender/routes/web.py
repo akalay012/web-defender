@@ -55,6 +55,18 @@ def v312_feed_sync():
     if sid: return jsonify(a.sync_discovery_source_v312(sid))
     return jsonify({"ok":True,"results":a.sync_due_feeds_v312(int(d.get("limit") or 8))})
 
+@app.get("/api/v34/discovery/runtime-status")
+def v346_discovery_runtime_status():
+    if not _admin_ok_v30(): return _admin_error_v30()
+    return jsonify({"ok":True,**_analyzer().discovery_runtime_status_v346()})
+
+@app.post("/api/v34/discovery/autonomous-iteration")
+def v346_discovery_autonomous_iteration():
+    if not _admin_ok_v30(): return _admin_error_v30()
+    d=request.get_json(silent=True) or {}
+    return jsonify(_analyzer().run_autonomous_discovery_iteration_v346(
+        int(d.get("feed_limit") or 4),int(d.get("scan_limit") or 2)))
+
 @app.post("/api/v34/discovery/process")
 def v344_discovery_process():
     if not _admin_ok_v30(): return _admin_error_v30()

@@ -409,6 +409,59 @@ class OperationalLearningMixin:
                 con.execute("UPDATE discovery_sources_v31 SET last_error=? WHERE source_id=?",(str(exc)[:500],source_id))
             return {"ok":False,"run_id":run_id,"error":str(exc)[:500],"backoff_seconds":backoff}
 
+    def discovery_runtime_status_v346(self):
+        """Operational view of the autonomous discovery loop without changing decisions."""
+        now=datetime.now(timezone.utc).isoformat()
+        with db_connect(DB_PATH,timeout=8) as con:
+            queue=dict(con.execute("SELECT status,COUNT(*) FROM discovery_queue_v301 GROUP BY status").fetchall())
+            due_sources=con.execute("""SELECT COUNT(*) FROM discovery_sources_v31 s
+              LEFT JOIN feed_sync_state_v312 f ON f.source_id=s.source_id
+              WHERE s.enabled=1 AND s.source_type IN ('url_feed','ioc_feed')
+                AND (f.next_sync_at IS NULL OR f.next_sync_at<=?)""",(now,)).fetchone()[0]
+            last=con.execute("""SELECT run_id,created_at,finished_at,claimed,scanned,failed,observations,campaigns,status
+              FROM discovery_scan_runs_v344 ORDER BY created_at DESC LIMIT 1""").fetchone()
+        return {"queue":queue,"due_sources":int(due_sources or 0),
+                "last_scan_run":dict(zip(("run_id","created_at","finished_at","claimed","scanned","failed",
+                    "observations","campaigns","status"),last)) if last else None,
+                "autonomous_enabled":os.getenv("WEB_DEFENDER_DISCOVERY_WORKER","0").lower() in ("1","true","yes","on"),
+                "policy":"Autonomous loop only processes bounded candidates. It cannot verify ground truth or promote model weights."}
+
+    def recover_stale_discovery_leases_v346(self, stale_minutes=20):
+        """Return abandoned scanning leases to retry after worker restarts."""
+        stale_minutes=max(5,min(180,int(stale_minutes)))
+        cutoff=(datetime.now(timezone.utc)-timedelta(minutes=stale_minutes)).isoformat()
+        # discovered_at is the durable timestamp available in the legacy queue schema.
+        # Only old 'scanning' rows are recovered; normal queued/observed rows are untouched.
+        with db_connect(DB_PATH,timeout=8) as con:
+            rows=con.execute("""SELECT item_id,attempts FROM discovery_queue_v301
+                WHERE status='scanning' AND discovered_at<?""",(cutoff,)).fetchall()
+            recovered=0
+            for item_id,attempts in rows:
+                status="failed" if int(attempts or 0)>=5 else "retry"
+                con.execute("""UPDATE discovery_queue_v301 SET status=?,next_attempt_at=?,
+                    last_error=? WHERE item_id=? AND status='scanning'""",
+                    (status,datetime.now(timezone.utc).isoformat(),
+                     "Recovered stale discovery lease after worker restart",item_id))
+                recovered+=1
+        return {"ok":True,"recovered":recovered,"stale_minutes":stale_minutes}
+
+    def run_autonomous_discovery_iteration_v346(self, feed_limit=4, scan_limit=2):
+        """One conservative autonomous iteration.
+
+        This is intentionally small for Render-class instances: ingestion is bounded,
+        scanning is Feed OFF, and learning remains shadow-only.
+        """
+        self.recover_stale_discovery_leases_v346()
+        feed_limit=max(1,min(8,int(feed_limit)))
+        scan_limit=max(1,min(4,int(scan_limit)))
+        result=self.run_production_discovery_pipeline_v344(feed_limit,scan_limit)
+        result["autonomous_iteration"]=True
+        result["feed_limit"]=feed_limit
+        result["scan_limit"]=scan_limit
+        result["ground_truth_write"]=False
+        result["production_weight_write"]=False
+        return result
+
     def process_discovery_queue_v344(self, limit=4):
         """Analyze a bounded batch of already-ingested candidates.
 

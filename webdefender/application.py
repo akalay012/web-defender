@@ -24,3 +24,9 @@ def start_optional_workers():
             threading.Thread(target=_ti_loop,name="threat-intel-sync",daemon=True).start()
         except Exception:
             pass
+    if os.getenv("WEB_DEFENDER_DISCOVERY_WORKER","0").lower() in ("1","true","yes","on"):
+        try:
+            from .discovery_worker import start_discovery_worker
+            start_discovery_worker()
+        except Exception:
+            pass
