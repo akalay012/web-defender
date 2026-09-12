@@ -1,4 +1,5 @@
 """Analyzer lifecycle and finding collection primitives."""
+from ..application import APP_VERSION
 import shutil
 import uuid
 import os, sys, json, subprocess
