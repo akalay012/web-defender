@@ -523,48 +523,157 @@ class AcquisitionSensorsMixin:
                 "proven_edges":edges,"proven_sensitive_to_unrelated_sink":bool(edges),
                 "policy":"API co-occurrence is telemetry; scoring requires bounded source -> explicit cross-root write proof."}
 
-    def _v324_static_interaction_graph(self, js, soup, base_url):
-        """Bounded, non-executing reconstruction of interaction-triggered data flow.
+    def _v341_static_interaction_graph(self, js, soup, base_url):
+        """Non-executing interaction/data-flow reconstruction.
 
-        It never clicks, types, submits, or executes extracted JavaScript. It only inspects
-        explicit handler source and HTML attributes. Strong proof requires a sensitive read
-        and an explicit unrelated write sink inside the same bounded handler region.
+        V34.1 follows named submit/click handlers and a small, bounded variable flow
+        without executing page code. A path is score-eligible only when a sensitive
+        source can be tied to an explicit unrelated network destination.
         """
-        js=(js or "")[:1000000]
+        js=(js or "")[:1200000]
         page_root=get_root_domain(urlparse(base_url).hostname or "")
-        sensitive_read_re=re.compile(r"(?:\.value\b|getElementById\s*\([^)]*(?:pass|otp|cvv|card|pin|email|user)|querySelector\s*\([^)]*(?:password|otp|cvv|card|pin|email|user)|FormData\s*\()",re.I)
-        write_re=re.compile(r"(?:fetch\s*\(\s*['\"]([^'\"]+)|\.open\s*\(\s*['\"](?:POST|PUT|PATCH)['\"]\s*,\s*['\"]([^'\"]+)|sendBeacon\s*\(\s*['\"]([^'\"]+)|(?:axios\.(?:post|put|patch)|\$\.post)\s*\(\s*['\"]([^'\"]+))",re.I)
-        handlers=[]
-        # Bounded extraction. This is intentionally conservative, not a JavaScript interpreter.
-        patterns=[
-          ("listener",re.compile(r"addEventListener\s*\(\s*['\"](submit|click|change|input)['\"]\s*,\s*(?:async\s*)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)\s*\{(.{0,7000}?)\}\s*\)",re.I|re.S)),
-          ("property",re.compile(r"on(submit|click|change|input)\s*=\s*(?:async\s*)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>)\s*\{(.{0,7000}?)\}",re.I|re.S)),
+        sensitive_rx=re.compile(
+            r"(?:\.value\b|document\.cookie\b|(?:localStorage|sessionStorage)(?:\.getItem|\s*\[)|"
+            r"new\s+FormData\s*\(|FormData\s*\(|getElementById\s*\([^)]*(?:pass|password|otp|cvv|cvc|card|pin|email|user)|"
+            r"querySelector\s*\([^)]*(?:pass|password|otp|cvv|cvc|card|pin|email|user))", re.I)
+        assign_rx=re.compile(r"\b(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s*=\s*([^;\n]{1,1000})",re.M)
+        ident_rx=re.compile(r"\b[A-Za-z_$][\w$]*\b")
+        literal_rx=re.compile(r"['\"]((?:https?:)?//[^'\"]+|/[^'\"]*)['\"]",re.I)
+        sink_rx=re.compile(
+            r"(?is)(?:fetch\s*\(\s*([^,\n\)]{1,800})(?:,\s*(\{.{0,2400}?\}))?|"
+            r"sendBeacon\s*\(\s*([^,\n\)]{1,800})\s*,\s*([^\)]{1,1600})|"
+            r"axios\s*\.\s*(?:post|put|patch)\s*\(\s*([^,\n\)]{1,800})\s*,\s*([^\)]{1,1600})|"
+            r"\$\s*\.\s*post\s*\(\s*([^,\n\)]{1,800})\s*,\s*([^\)]{1,1600})|"
+            r"\.open\s*\(\s*['\"](?:POST|PUT|PATCH)['\"]\s*,\s*([^,\n\)]{1,800}))")
+
+        def analyze_body(body, handler_name="", event="", kind="script"):
+            body=str(body or "")[:14000]
+            tainted=set()
+            source_rows=[]
+            assigns=list(assign_rx.finditer(body))[:160]
+            for m in assigns:
+                name,rhs=m.group(1),m.group(2)
+                if sensitive_rx.search(rhs):
+                    tainted.add(name)
+                    source_rows.append({"var":name,"offset":m.start(),"expression":rhs[:240]})
+            for _ in range(8):
+                changed=False
+                for m in assigns:
+                    name,rhs=m.group(1),m.group(2)
+                    if name not in tainted and (set(ident_rx.findall(rhs)) & tainted):
+                        tainted.add(name); changed=True
+                if not changed: break
+
+            sinks=[]
+            proven=[]
+            for m in list(sink_rx.finditer(body))[:80]:
+                parts=[x for x in m.groups() if x]
+                joined=" ".join(parts)
+                refs=set(ident_rx.findall(joined))
+                carries=bool(sensitive_rx.search(joined) or (refs & tainted))
+                dest=""
+                # Resolve literal URL directly or through a simple variable assignment.
+                for part in parts[:3]:
+                    lm=literal_rx.search(part)
+                    if lm:
+                        dest=urljoin(base_url,lm.group(1)); break
+                    token=part.strip()
+                    if re.fullmatch(r"[A-Za-z_$][\w$]*",token):
+                        for am in assigns:
+                            if am.group(1)==token:
+                                lm=literal_rx.search(am.group(2))
+                                if lm:
+                                    dest=urljoin(base_url,lm.group(1)); break
+                    if dest: break
+                root=get_root_domain(urlparse(dest).hostname or "") if dest else ""
+                cross=bool(dest and root and page_root and root!=page_root)
+                row={"destination":dest[:700],"destination_root":root,"cross_root":cross,
+                     "carries_sensitive":carries,"tainted_variables":sorted(refs & tainted)[:20],
+                     "offset":m.start()}
+                sinks.append(row)
+                if carries and cross:
+                    proven.append(row)
+            return {"kind":kind,"event":event,"handler":handler_name[:160],
+                    "sensitive_read":bool(source_rows or sensitive_rx.search(body)),
+                    "tainted_variables":sorted(tainted)[:80],"sources":source_rows[:40],
+                    "write_sinks":sinks[:40],"proven_paths":proven[:20],
+                    "proven_sensitive_to_cross_root":bool(proven)}
+
+        # Named function bodies. This lets addEventListener("submit", sendLogin)
+        # be followed without invoking sendLogin.
+        named={}
+        named_patterns=[
+            re.compile(r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{(.{0,14000}?)\n?\}",re.S),
+            re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{(.{0,14000}?)\n?\}",re.S),
         ]
-        for kind,pat in patterns:
+        for pat in named_patterns:
             for m in pat.finditer(js):
-                event=(m.group(1) or "").lower(); body=m.group(2) or ""
-                sens=bool(sensitive_read_re.search(body))
-                sinks=[]
-                for wm in write_re.finditer(body):
-                    raw=next((g for g in wm.groups() if g),"")
-                    u=urljoin(base_url,raw); rr=get_root_domain(urlparse(u).hostname or "")
-                    sinks.append({"url":u[:700],"root":rr,"cross_root":bool(rr and page_root and rr!=page_root)})
-                cross=[x for x in sinks if x["cross_root"]]
-                handlers.append({"kind":kind,"event":event,"sensitive_read":sens,"write_sinks":sinks[:12],"cross_root_sinks":cross[:12],"proven_sensitive_to_cross_root":bool(sens and cross)})
-                if len(handlers)>=80: break
-            if len(handlers)>=80: break
+                named.setdefault(m.group(1),m.group(2))
+                if len(named)>=160: break
+
+        handlers=[]
+        inline_patterns=[
+            ("listener",re.compile(r"addEventListener\s*\(\s*['\"](submit|click|change|input)['\"]\s*,\s*(?:async\s*)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)\s*\{(.{0,14000}?)\}\s*\)",re.I|re.S)),
+            ("property",re.compile(r"on(submit|click|change|input)\s*=\s*(?:async\s*)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>)\s*\{(.{0,14000}?)\}",re.I|re.S)),
+        ]
+        for kind,pat in inline_patterns:
+            for m in pat.finditer(js):
+                handlers.append(analyze_body(m.group(2),event=(m.group(1) or "").lower(),kind=kind))
+                if len(handlers)>=100: break
+
+        named_listener_rx=re.compile(
+            r"addEventListener\s*\(\s*['\"](submit|click|change|input)['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*(?:[,)]|$)",re.I)
+        for m in named_listener_rx.finditer(js):
+            event,name=(m.group(1) or "").lower(),m.group(2)
+            body=named.get(name)
+            if body:
+                handlers.append(analyze_body(body,handler_name=name,event=event,kind="named_listener"))
+            if len(handlers)>=140: break
+
+        # HTML inline handlers are inspected as source only. No DOM event is fired.
         html_handlers=[]
-        for el in soup.find_all(True)[:1200]:
+        for el in soup.find_all(True)[:1600]:
             for attr,event in (("onsubmit","submit"),("onclick","click"),("onchange","change"),("oninput","input")):
                 code=str(el.get(attr) or "")
                 if not code: continue
-                sens=bool(sensitive_read_re.search(code)); sinks=[]
-                for wm in write_re.finditer(code):
-                    raw=next((g for g in wm.groups() if g),""); u=urljoin(base_url,raw); rr=get_root_domain(urlparse(u).hostname or "")
-                    sinks.append({"url":u[:700],"root":rr,"cross_root":bool(rr and page_root and rr!=page_root)})
-                html_handlers.append({"event":event,"tag":el.name,"sensitive_read":sens,"write_sinks":sinks[:8],"proven_sensitive_to_cross_root":bool(sens and any(x["cross_root"] for x in sinks))})
-        proven=[x for x in handlers+html_handlers if x.get("proven_sensitive_to_cross_root")]
-        return {"mode":"non_executing_static_reconstruction","handler_count":len(handlers)+len(html_handlers),"script_handlers":handlers[:80],"html_handlers":html_handlers[:40],"proven_paths":proven[:20],"proven_count":len(proven),"policy":"No live control is activated. Strong proof requires sensitive source and explicit unrelated write sink in the same bounded handler."}
+                row=analyze_body(code,event=event,kind="html_attribute")
+                row["tag"]=el.name
+                html_handlers.append(row)
+                # If the attribute simply calls a named function, inspect that function too.
+                cm=re.fullmatch(r"\s*(?:return\s+)?([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*;?\s*",code)
+                if cm and cm.group(1) in named:
+                    rr=analyze_body(named[cm.group(1)],handler_name=cm.group(1),event=event,kind="html_named_handler")
+                    rr["tag"]=el.name
+                    html_handlers.append(rr)
+                if len(html_handlers)>=80: break
+            if len(html_handlers)>=80: break
+
+        all_rows=(handlers+html_handlers)[:220]
+        proven=[]
+        for row in all_rows:
+            for path in row.get("proven_paths") or []:
+                proven.append({"kind":row.get("kind"),"event":row.get("event"),
+                               "handler":row.get("handler"),**path})
+                if len(proven)>=40: break
+            if len(proven)>=40: break
+        potential=[x for x in all_rows if x.get("sensitive_read") and x.get("write_sinks") and not x.get("proven_sensitive_to_cross_root")]
+        return {
+            "mode":"non_executing_interaction_dataflow_v341",
+            "handler_count":len(all_rows),"named_function_count":len(named),
+            "script_handlers":handlers[:120],"html_handlers":html_handlers[:60],
+            "proven_paths":proven[:40],"proven_count":len(proven),
+            "potential_paths":potential[:30],"potential_count":len(potential),
+            "score_eligible":bool(proven),
+            "evidence_levels":{"observed":"runtime behavior actually emitted by the page",
+                               "proven_static_path":"bounded sensitive source -> explicit unrelated sink",
+                               "potential_path":"handler/source/sink exists but causality is incomplete; context only"},
+            "safety":"No click, typing, submit, credential entry, challenge bypass, or extracted-code execution.",
+            "policy":"Only proven static paths may become strong static evidence; potential paths never vote as hard evidence."
+        }
+
+    # Compatibility name retained for the existing pipeline.
+    def _v324_static_interaction_graph(self, js, soup, base_url):
+        return self._v341_static_interaction_graph(js, soup, base_url)
 
     def static_source_intelligence_v32317(self, html, base_url):
         """Feed-independent static source expert over a verified 2xx target body.

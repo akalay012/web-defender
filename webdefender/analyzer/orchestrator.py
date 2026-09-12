@@ -370,7 +370,10 @@ class ScanOrchestratorMixin:
           "registered_listeners":listeners[:100] if isinstance(listeners,list) else [],
           "proven_static_paths":proven[:20],
           "proven_static_path_count":len(proven),
+          "potential_static_paths":(st.get("potential_paths") or [])[:30],
+          "potential_static_path_count":int(st.get("potential_count") or 0),
           "observed_runtime_submits":len(runtime.get("form_submits") or []) if isinstance(runtime,dict) else 0,
+          "evidence_levels":st.get("evidence_levels") or {},
           "score_eligible":bool(proven),
           "interpretation":"A handler can be inspected without activating it. Potential paths remain context-only; only bounded sensitive-source -> unrelated-sink proof may vote.",
           "safety":"No click, typing, submit, credential entry, challenge bypass, or extracted-code execution is performed."
