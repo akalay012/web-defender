@@ -3,6 +3,7 @@
 Experts consume observations/canonical evidence and emit hypotheses. They do
 not own the final EngineDecision.
 """
+from ..analyzer.url_domain import host_is_raw_ip
 from ..metadata import APP_VERSION
 import difflib, os
 import re, math, hashlib, json
