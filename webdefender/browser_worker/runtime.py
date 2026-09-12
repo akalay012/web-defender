@@ -1,4 +1,5 @@
 """Isolated browser-worker runtime."""
+import hashlib, io, threading
 import os, sys, re, json, time, socket, ipaddress
 from urllib.parse import urlparse, urljoin
 from ..analyzer.url_domain import host_is_private, resolve_public_ips, get_canonical_root

@@ -3,6 +3,7 @@
 These subsystems evolve observations and regression knowledge. They do not own
 the final verdict and must never promote the engine's own prediction to ground truth.
 """
+import csv
 import os, re, json, time, hashlib, math, uuid
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse

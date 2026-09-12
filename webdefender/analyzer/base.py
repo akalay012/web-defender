@@ -1,4 +1,6 @@
 """Analyzer lifecycle and finding collection primitives."""
+import shutil
+import uuid
 import os, sys, json, subprocess
 from datetime import datetime, timezone
 from urllib.parse import urlparse

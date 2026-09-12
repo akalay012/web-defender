@@ -3,6 +3,7 @@
 External feeds are sensors only. This module ingests and caches observations;
 it does not own Web Defender's final verdict.
 """
+import tempfile
 import os, re, json, time, hashlib, threading, csv, io
 from datetime import datetime, timezone
 from urllib.parse import urlparse

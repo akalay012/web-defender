@@ -3,6 +3,7 @@
 These methods gather transport, infrastructure, page-configuration and
 intelligence observations. Configuration weakness is not itself threat proof.
 """
+import base64, difflib
 import os, re, json, time, ssl, socket, ipaddress, hashlib, math
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, urljoin, parse_qsl
