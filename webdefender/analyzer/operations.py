@@ -488,10 +488,12 @@ class OperationalLearningMixin:
               (run_id,now,len(claimed),"running",json.dumps({"limit":limit})))
 
         scanned=failed=observations=campaigns=0; reports=[]
+        print(f"[DISCOVERY] Queue batch | run={run_id} | claimed={len(claimed)} | feed_off=true", flush=True)
         # Local import avoids an engine/operations circular import at module import time.
         from ..engine import WebDefenderAnalyzer
         for item_id,url,attempt_no in claimed:
             try:
+                print(f"[DISCOVERY] Scan started | url={url} | attempt={attempt_no} | feed_off=true", flush=True)
                 # Feed OFF is intentional: external intelligence may remain visible, but
                 # cannot carry the engine verdict for autonomous discovery evaluation.
                 child=WebDefenderAnalyzer(url,feed_off=True)
@@ -505,10 +507,13 @@ class OperationalLearningMixin:
                 with db_connect(DB_PATH,timeout=10) as con:
                     con.execute("""UPDATE discovery_queue_v301 SET status='observed',
                       next_attempt_at=NULL,last_error=NULL WHERE item_id=?""",(item_id,))
+                score=float(result.get("risk_score") or 0)
+                verdict=((result.get("defender") or {}).get("assessment") or {}).get("verdict") or result.get("risk_level") or "unknown"
                 reports.append({"item_id":item_id,"observation_id":oid,
-                    "engine_score":float(result.get("risk_score") or 0),
+                    "engine_score":score,
                     "ground_truth_status":"candidate",
                     "campaign_id":((corr or {}).get("campaign") or {}).get("campaign_id")})
+                print(f"[DISCOVERY] Scan finished | url={url} | threat={score:g} | verdict={verdict} | observation={oid}", flush=True)
             except Exception as exc:
                 failed+=1
                 # Bounded exponential retry, then terminal failure. Never infinite-spin.
@@ -519,6 +524,7 @@ class OperationalLearningMixin:
                     con.execute("""UPDATE discovery_queue_v301 SET status=?,next_attempt_at=?,
                       last_error=? WHERE item_id=?""",(status,next_at,str(exc)[:500],item_id))
                 reports.append({"item_id":item_id,"error":str(exc)[:240],"status":status})
+                print(f"[DISCOVERY][ERROR] Scan failed | url={url} | status={status} | error={str(exc)[:240]}", flush=True)
 
         finished=datetime.now(timezone.utc).isoformat()
         with db_connect(DB_PATH,timeout=10) as con:
@@ -527,6 +533,7 @@ class OperationalLearningMixin:
               (finished,scanned,failed,observations,campaigns,
                "success" if failed==0 else ("partial" if scanned else "failed"),
                json.dumps({"reports":reports[:12]},ensure_ascii=False,default=str),run_id))
+        print(f"[DISCOVERY] Cycle finished | run={run_id} | scanned={scanned} | failed={failed} | observations={observations} | campaigns={campaigns}", flush=True)
         return {"ok":failed==0,"run_id":run_id,"claimed":len(claimed),"scanned":scanned,
                 "failed":failed,"observations":observations,"campaigns":campaigns,
                 "feed_off":True,"ground_truth_effect":False,"reports":reports,
