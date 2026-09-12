@@ -365,7 +365,8 @@ class ResidualServicesMixin:
 
     def normalize_discovery_url_v301(self, url):
         try:
-            u=self.normalize_url(str(url or "").strip())
+            from .url_domain import normalize_url
+            u=normalize_url(str(url or "").strip())
             p=urlparse(u)
             if p.scheme not in ("http","https") or not p.hostname: return None
             return u

@@ -410,6 +410,7 @@ class OperationalLearningMixin:
                   consecutive_failures=excluded.consecutive_failures,backoff_seconds=excluded.backoff_seconds,last_error=excluded.last_error""",
                   (source_id,(done+timedelta(seconds=backoff)).isoformat(),failures,backoff,str(exc)[:500]))
                 con.execute("UPDATE discovery_sources_v31 SET last_error=? WHERE source_id=?",(str(exc)[:500],source_id))
+            print(f"[DISCOVERY][ERROR] Source sync failed | source={name} | error={str(exc)[:240]} | backoff={backoff}s", flush=True)
             return {"ok":False,"run_id":run_id,"error":str(exc)[:500],"backoff_seconds":backoff}
 
     def discovery_runtime_status_v346(self):
