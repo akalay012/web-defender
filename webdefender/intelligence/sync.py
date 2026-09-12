@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 import requests
 
-from .state import THREAT_INTEL_STORE, _TI_SYNC_LOCK
-from .database import db_connect
-from .analyzer.url_domain import get_root_domain, get_canonical_root
+from ..state import THREAT_INTEL_STORE, _TI_SYNC_LOCK
+from ..database import db_connect
+from ..analyzer.url_domain import get_root_domain, get_canonical_root
 
 def _expiry(value,days):
     try:
