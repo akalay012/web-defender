@@ -9,6 +9,17 @@ DATABASE_URL=os.getenv("DATABASE_URL","").strip()
 def db_backend_name():
     return "postgresql" if DATABASE_URL else "sqlite"
 
+
+def db_persistence_status():
+    """Describe persistence semantics without treating availability as threat evidence."""
+    backend=db_backend_name()
+    return {
+        "backend":backend,
+        "durable_expected":backend=="postgresql",
+        "configured":bool(DATABASE_URL) if backend=="postgresql" else True,
+        "note":"PostgreSQL is the durable production backend; SQLite is local/fallback storage."
+    }
+
 def _pg_sql(sql):
     q=str(sql)
     q=re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b","BIGSERIAL PRIMARY KEY",q,flags=re.I)

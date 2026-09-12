@@ -12,9 +12,9 @@ from ..metadata import APP_VERSION
 import re
 import uuid
 import json, hashlib, math, time, sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from ..database import db_connect
+from ..database import db_connect, db_backend_name
 from ..evidence.policy import stable_evidence_id, is_derived_evidence, independent_group
 from ..fusion.policy import compute_final_decision
 from ..guards.policy import is_hard_evidence_text
@@ -789,43 +789,107 @@ class DecisionEvidenceMixin:
             if hard and age<=30: hard_recent.append(item)
             if str(r[1] or "")!=cur["surface_class"] and (bool(r[2]) or cur["credential_surface"]): material=True
         score_eligible=bool(hard_recent)
-        rep={"state":"ok","history_count":len(hist),"current_surface":cur,"recent_history":hist[:8],"prior_hard_evidence":hard_recent[:8],"material_surface_change":material,"score_eligible":score_eligible,
-             "policy":"Current observation, engine prediction and verified ground truth remain separate. Only recent concrete internal causal/IOC history may vote; weak predictions are diagnostic only."}
+        rep={"state":"ok","history_count":len(hist),"current_surface":cur,"recent_history":hist[:8],
+             "prior_hard_evidence":hard_recent[:8],"material_surface_change":material,
+             "score_eligible":score_eligible,"backend":db_backend_name(),
+             "durable_backend":db_backend_name()=="postgresql",
+             "authority_classes":["observation","internally_observed_hard","analyst_verified"],
+             "policy":"Current observation, engine prediction and verified ground truth remain separate. Only recent concrete internal causal/IOC history may vote; weak predictions and external-feed-only history are diagnostic only."}
         if score_eligible:
             self.add_finding("Yakın geçmişte aynı URL'de doğrulanabilir zararlı davranış gözlendi","high","Mevcut içerik değişmiş olsa bile aynı URL için son 30 gün içinde Web Defender'ın doğrudan gözlemlediği somut hassas-veri→harici-hedef veya IOC kanıtı bulunuyor.","phishing",json.dumps({"history":hard_recent[:4],"current_surface":cur},ensure_ascii=False),.94)
             self.results["findings"][-1].update({"producer":"temporal_threat_memory_v3241","source_expert":"temporal_behavior","independent_group":"phishing_family_history","evidence_lineage_id":"v3241-temporal-hard-history","historical_evidence":True,"derived_evidence":True})
         self.results["temporal_threat_memory_v3241"]=rep; return rep
 
     def persist_temporal_observation_v3241(self):
-        """Persist compact fingerprints and authority, never full page bodies or credentials."""
+        """Persist compact temporal evidence after canonical decision.
+
+        Hard historical authority is granted only to settled internal causal evidence
+        or analyst-verified IOC/hash evidence. Raw regex/static candidate counts and
+        external-feed-only hits can never become historical ground truth.
+        """
         try:
-            _ensure_trust_db(); u=normalize_url(self.results.get("analyzed_url") or self.results.get("final_url") or ""); root=get_root_domain(urlparse(u).hostname or "")
-            snap=self._v3241_surface_snapshot(); nonex=self.results.get("non_executing_interaction_v324") or {}
-            # Static/regex path count is diagnostic only. Hard temporal authority requires
-            # a settled concrete causal edge or a non-feed verified IOC/hash.
+            _ensure_trust_db()
+            u=normalize_url(self.results.get("analyzed_url") or self.results.get("final_url") or "")
+            root=get_root_domain(urlparse(u).hostname or "")
+            snap=self._v3241_surface_snapshot()
+            bus=self.results.get("evidence_bus_v3236") or {}
+            bus_events=bus.get("events") or []
+
+            # Canonical V34.1.1 non-executing proof is eligible only after Evidence Bus
+            # promotion into a causal event. The raw static sensor is never authoritative.
+            canonical_nonexec=[
+                e for e in bus_events if isinstance(e,dict)
+                and e.get("source_producer")=="non_executing_interaction_v341"
+                and e.get("modality")=="static_source_sink"
+                and bool(e.get("causal"))
+                and e.get("expert_family") in ("credential_theft","network_exfil")
+            ]
+
             graph=self.results.get("causal_destination_graph_v3238") or {}
             jsflow=self.results.get("javascript_dataflow") or self.results.get("js_dataflow_v3244") or {}
-            concrete_exfil=bool(
+            runtime_causal=bool(
                 (graph.get("concrete_exfil") and (graph.get("strong_causal_edges") or []))
                 or jsflow.get("proven_sensitive_crossroot_paths")
             )
-            proven=concrete_exfil
+            concrete_exfil=bool(runtime_causal or canonical_nonexec)
+
             known=False
+            analyst_verified=False
             for f in self.results.get("findings") or []:
                 blob=(str(f.get("producer") or "")+" "+str(f.get("source_expert") or "")+" "+str(f.get("title") or "")).lower()
                 is_ioc=("known_ioc" in blob or "malware_hash" in blob or "malicious hash" in blob)
                 external=bool(f.get("external_intelligence_v32320") or f.get("feed_off_held_v3231"))
                 analyst=bool(f.get("analyst_verified") or str(f.get("authority") or "")=="analyst_verified")
+                if analyst: analyst_verified=True
                 if is_ioc and (not external or analyst): known=True
-            authority="internally_observed_hard" if (concrete_exfil or known) else "observation"
-            score=float(((self.results.get("defender") or {}).get("assessment") or {}).get("score") or self.results.get("risk_score") or 0)
-            oid="TO-"+uuid.uuid4().hex; ts=datetime.now(timezone.utc).isoformat(); uh=hashlib.sha256(u.encode()).hexdigest(); status=int((self.results.get("http") or {}).get("status_code") or 0)
-            prov=json.dumps({"concrete_exfil":concrete_exfil,"proven_nonexecuting_path_diagnostic":bool(nonex.get("proven_static_path_count")),"known_ioc":known,"feed_off":bool(self.results.get("_feed_off_v3231")),"external_scripts":(self.results.get("static_source_intelligence_v32317") or {}).get("external_script_inspection_v3241")},ensure_ascii=False)
+
+            authority="analyst_verified" if analyst_verified and known else (
+                "internally_observed_hard" if (concrete_exfil or known) else "observation"
+            )
+            proven=bool(concrete_exfil)
+            score=float((self.results.get("scores") or {}).get("threat")
+                        or ((self.results.get("defender") or {}).get("assessment") or {}).get("score")
+                        or self.results.get("risk_score") or 0)
+
+            oid="TO-"+uuid.uuid4().hex
+            ts=datetime.now(timezone.utc).isoformat()
+            uh=hashlib.sha256(u.encode()).hexdigest()
+            status=int((self.results.get("http") or {}).get("status_code") or 0)
+            prov=json.dumps({
+                "authority_rule":"canonical_causal_or_verified_ioc_only",
+                "runtime_causal":runtime_causal,
+                "canonical_nonexec_event_ids":[e.get("event_id") for e in canonical_nonexec[:12]],
+                "known_ioc":known,
+                "analyst_verified":analyst_verified,
+                "feed_off":bool(self.results.get("_feed_off_v3231")),
+                "external_feed_is_authority":False,
+                "stores_credentials":False,
+                "stores_full_body":False
+            },ensure_ascii=False)
+
             with db_connect(DB_PATH,timeout=5) as con:
-                con.execute("INSERT INTO temporal_observations_v3241(observation_id,observed_at,url_hash,normalized_url,registrable_domain,final_url,http_status,title,dom_sha256,surface_class,credential_surface,proven_sensitive_crossroot,known_ioc,engine_score,authority,provenance,scan_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(oid,ts,uh,u,root,str(self.results.get("final_url") or u),status,snap["title"],snap["dom_sha256"],snap["surface_class"],int(snap["credential_surface"]),int(proven),int(known),score,authority,prov,APP_VERSION))
-            rep={"stored":True,"observation_id":oid,"authority":authority,"surface_class":snap["surface_class"],"stores_full_body":False}
-        except Exception as e: rep={"stored":False,"error":str(e)[:240]}
-        self.results["temporal_persist_v3241"]=rep; return rep
+                con.execute("""INSERT INTO temporal_observations_v3241(
+                    observation_id,observed_at,url_hash,normalized_url,registrable_domain,final_url,
+                    http_status,title,dom_sha256,surface_class,credential_surface,
+                    proven_sensitive_crossroot,known_ioc,engine_score,authority,provenance,scan_version)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (oid,ts,uh,u,root,str(self.results.get("final_url") or u),status,snap["title"],
+                     snap["dom_sha256"],snap["surface_class"],int(snap["credential_surface"]),
+                     int(proven),int(known),score,authority,prov,APP_VERSION))
+                # Bound local history growth. This is retention, not evidence downgrading.
+                con.execute("DELETE FROM temporal_observations_v3241 WHERE observed_at < ?",
+                            ((datetime.now(timezone.utc)-timedelta(days=180)).isoformat(),))
+
+            rep={"stored":True,"observation_id":oid,"authority":authority,
+                 "surface_class":snap["surface_class"],"backend":db_backend_name(),
+                 "durable_backend":db_backend_name()=="postgresql",
+                 "canonical_nonexec_hard":bool(canonical_nonexec),
+                 "stores_full_body":False,"stores_credentials":False,
+                 "retention_days":180}
+        except Exception as e:
+            rep={"stored":False,"backend":db_backend_name(),"error":str(e)[:240]}
+        self.results["temporal_persist_v3241"]=rep
+        return rep
 
     def calculate_scores(self):
         http_ok = self.results["http"]["status_code"] is not None
