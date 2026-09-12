@@ -3,6 +3,7 @@
 These methods observe HTTP/browser/content/script surfaces. They do not own the
 final verdict. The mixin is intentionally free of Flask route concerns.
 """
+from ..metadata import USER_AGENT
 from ..metadata import RUNNING_ON_PYTHONANYWHERE
 import requests, re, ssl, socket, ipaddress, time, os, json, hashlib, math, uuid, subprocess, sys, tempfile, shutil, difflib, csv, threading, zipfile, io, base64
 from bs4 import BeautifulSoup
@@ -25,9 +26,6 @@ from .identity import (
 REQUEST_TIMEOUT=15
 MAX_CONTENT_SIZE=5*1024*1024
 MAX_REDIRECTS=8
-USER_AGENT=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36")
-
 class AcquisitionSensorsMixin:
     def run_browser_worker(self, url, timeout=42):
         """Chromium/Playwright'i ayrı bir Python prosesinde çalıştırır.

@@ -3,6 +3,7 @@
 These methods gather transport, infrastructure, page-configuration and
 intelligence observations. Configuration weakness is not itself threat proof.
 """
+from ..metadata import USER_AGENT
 from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION
 import base64, difflib
@@ -29,9 +30,6 @@ from ..intelligence.policy import decision_weight as intelligence_decision_weigh
 REQUEST_TIMEOUT=15
 MAX_CONTENT_SIZE=5*1024*1024
 MAX_REDIRECTS=8
-USER_AGENT=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36")
-
 class ContextSensorsMixin:
     def probe_network(self, host):
         """TCP seviyesinde 80/443 portlarını HTTP'den bağımsız test eder.
