@@ -451,6 +451,8 @@ class OperationalLearningMixin:
         This is intentionally small for Render-class instances: ingestion is bounded,
         scanning is Feed OFF, and learning remains shadow-only.
         """
+        from ..intelligence.sync import _trust_db_init
+        _trust_db_init()
         self.recover_stale_discovery_leases_v346()
         feed_limit=max(1,min(8,int(feed_limit)))
         scan_limit=max(1,min(4,int(scan_limit)))

@@ -23,6 +23,12 @@ def _loop():
     while True:
         try:
             print("[DISCOVERY] Autonomous cycle started", flush=True)
+            # Discovery tables live in the shared trust/learning schema initializer.
+            # The autonomous worker can start even when threat-intel sync is disabled,
+            # so initialize the schema explicitly before the first queue access.
+            from .intelligence.sync import _trust_db_init
+            _trust_db_init()
+            print("[DISCOVERY] Database schema ready", flush=True)
             from .engine import WebDefenderAnalyzer
             WebDefenderAnalyzer().run_autonomous_discovery_iteration_v346(feed_limit,scan_limit)
         except Exception as exc:
