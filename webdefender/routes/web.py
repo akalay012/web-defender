@@ -7,6 +7,7 @@ def analyze_url(url, feed_off=True):
 This module owns HTTP presentation and administrative endpoints. It delegates
 analysis to the engine and never recalculates threat scores.
 """
+from ..analyzer.url_domain import normalize_url
 import hashlib, re
 import uuid
 import os, json
