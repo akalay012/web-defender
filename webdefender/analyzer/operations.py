@@ -543,34 +543,52 @@ class OperationalLearningMixin:
                 _scan_timeout=max(30,min(85,int(os.getenv("WEB_DEFENDER_DISCOVERY_SCAN_TIMEOUT_SECONDS","75") or 75)))
                 _tmp=tempfile.NamedTemporaryFile(prefix="wd-discovery-",suffix=".json",delete=False)
                 _tmp_path=_tmp.name; _tmp.close()
+                _hb=tempfile.NamedTemporaryFile(prefix="wd-discovery-hb-",suffix=".json",delete=False)
+                _hb_path=_hb.name; _hb.close()
                 try:
                     # Do not use subprocess.run(..., stderr=PIPE) here. Browser descendants
                     # can inherit the pipe and keep communicate() blocked even after the direct
                     # child is killed. A new POSIX process group lets us terminate the complete
                     # scan tree at the deadline.
                     _proc=subprocess.Popen(
-                        [sys.executable,"-m","webdefender.discovery_scan_runner",url,_tmp_path],
-                        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                        text=True,start_new_session=True
+                        [sys.executable,"-m","webdefender.discovery_scan_runner",url,_tmp_path,_hb_path],
+                        stdout=None,stderr=None,text=True,start_new_session=True
                     )
-                    try:
-                        _rc=_proc.wait(timeout=_scan_timeout)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(_proc.pid, signal.SIGKILL)
+                    _deadline=time.monotonic()+_scan_timeout
+                    _last_report=0.0
+                    _rc=None
+                    while time.monotonic() < _deadline:
+                        _rc=_proc.poll()
+                        if _rc is not None: break
+                        _now=time.monotonic()
+                        if _now-_last_report >= 10:
+                            _last_report=_now
+                            _stage="starting"; _state="waiting"; _age=None
+                            try:
+                                with open(_hb_path,"r",encoding="utf-8") as _hf:
+                                    _hd=json.load(_hf)
+                                _stage=str(_hd.get("stage") or "unknown")
+                                _state=str(_hd.get("state") or "unknown")
+                                _age=max(0.0,time.time()-float(_hd.get("ts") or time.time()))
+                            except Exception: pass
+                            print(f"[DISCOVERY-WATCHDOG] pid={_proc.pid} | stage={_stage} | state={_state} | heartbeat_age={_age if _age is not None else 'n/a'} | remaining={max(0,int(_deadline-_now))}s",flush=True)
+                        time.sleep(1)
+                    if _rc is None:
+                        try: os.killpg(_proc.pid, signal.SIGKILL)
                         except (ProcessLookupError, PermissionError, OSError):
                             try: _proc.kill()
                             except Exception: pass
                         try: _proc.wait(timeout=5)
                         except Exception: pass
-                        raise RuntimeError(f"isolated scan hard timeout after {_scan_timeout}s")
+                        raise RuntimeError(f"isolated scan watchdog timeout after {_scan_timeout}s | last_stage={_stage} | state={_state}")
                     if _rc!=0:
                         raise RuntimeError("isolated scan exited "+str(_rc))
                     with open(_tmp_path,"r",encoding="utf-8") as _fh:
                         result=json.load(_fh)
                 finally:
-                    try: os.unlink(_tmp_path)
-                    except OSError: pass
+                    for _cleanup in (_tmp_path,_hb_path):
+                        try: os.unlink(_cleanup)
+                        except OSError: pass
                 if not isinstance(result,dict) or result.get("error"):
                     raise RuntimeError(str((result or {}).get("error") or "scan failed"))
                 # Persist the isolated result through the existing candidate-observation path.

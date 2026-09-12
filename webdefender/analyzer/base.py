@@ -1,3 +1,4 @@
+import time
 """Analyzer lifecycle and finding collection primitives."""
 from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION
@@ -97,10 +98,26 @@ class AnalyzerBase:
             "confidence": round(confidence, 2),
         })
 
+    def _stage_heartbeat_v3477(self, stage, state="enter"):
+        path=os.environ.get("WEB_DEFENDER_SCAN_HEARTBEAT_FILE","").strip()
+        if not path: return
+        try:
+            payload={"ts":time.time(),"stage":str(stage),"state":str(state),"pid":os.getpid()}
+            tmp=path+".tmp"
+            with open(tmp,"w",encoding="utf-8") as fh:
+                json.dump(payload,fh,separators=(",",":"))
+            os.replace(tmp,path)
+            print(f"[DISCOVERY-SCAN] stage={stage} | state={state} | pid={os.getpid()}",flush=True)
+        except Exception:
+            pass
+
     def run_check(self, name, fn, *args):
+        self._stage_heartbeat_v3477(name,"enter")
         try:
             fn(*args)
+            self._stage_heartbeat_v3477(name,"exit")
         except Exception as exc:
+            self._stage_heartbeat_v3477(name,"error")
             self.results["errors"].append({"module": name, "error": str(exc)})
 
     def detect_hosting_environment(self):

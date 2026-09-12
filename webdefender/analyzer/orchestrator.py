@@ -27,8 +27,10 @@ class ScanOrchestratorMixin:
         self.results["_feed_off_v3231"] = bool(getattr(self, "feed_off_v3231", False))
         self.results["timings_v19"]={"started":datetime.now(timezone.utc).isoformat()}
         _v19_started=time.perf_counter()
+        self._stage_heartbeat_v3477("fast_pipeline","enter")
         try: self.run_fast_pipeline_v19(normalize_url(url))
         except Exception: self.results["fast_pipeline_v19"]={"sensors":[],"state":"error"}
+        self._stage_heartbeat_v3477("fast_pipeline","exit")
         self.results["hosting_environment"] = self.detect_hosting_environment()
         started = time.perf_counter()
         self.results["scan"]["started_at"] = datetime.now().isoformat()
@@ -81,7 +83,9 @@ class ScanOrchestratorMixin:
 
         try:
             t0 = time.perf_counter()
+            self._stage_heartbeat_v3477("http_fetch","enter")
             response, redirect_chain, final_url, connection_attempts, used_http_fallback = self.fetch_with_scheme_fallback(session, url)
+            self._stage_heartbeat_v3477("http_fetch","exit")
 
             # V32.3.15 — generic observation recovery for a common hostname-shape failure.
             # Some tenant/hosted applications exist at tenant.platform.tld but a user
