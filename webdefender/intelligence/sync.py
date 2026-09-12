@@ -3,7 +3,7 @@
 External feeds are sensors only. This module ingests and caches observations;
 it does not own Web Defender's final verdict.
 """
-from ..database import DB_PATH
+from ..state import DB_PATH
 from ..analyzer.url_domain import registrable_domain_v21
 from ..metadata import USER_AGENT
 from ..metadata import APP_VERSION

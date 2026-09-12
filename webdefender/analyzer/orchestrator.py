@@ -3,7 +3,7 @@
 The orchestrator orders sensors, guards, experts and final decision authority.
 It does not redefine their evidence semantics.
 """
-from ..database import DB_PATH
+from ..state import DB_PATH
 from ..state import LEARNING_ENGINE
 from ..state import THREAT_INTEL_STORE
 from ..database import db_connect
