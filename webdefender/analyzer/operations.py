@@ -462,6 +462,25 @@ class OperationalLearningMixin:
                 recovered+=1
         return {"ok":True,"recovered":recovered,"stale_minutes":stale_minutes}
 
+    def run_autonomous_discovery_ingestion_v347(self, feed_limit=4):
+        """Bounded feed ingestion only; never scans and never writes ground truth."""
+        from ..intelligence.sync import _trust_db_init
+        _trust_db_init()
+        builtins=self.ensure_builtin_phishing_sources_v347()
+        print(f"[DISCOVERY] Built-in phishing sources ready | sources={len(builtins.get('sources') or [])} | target_per_source=20", flush=True)
+        self.recover_stale_discovery_leases_v346()
+        feed_limit=max(1,min(8,int(feed_limit)))
+        # Reuse the existing source synchronizer without entering queue processing.
+        sources=self.list_discovery_sources_v301(enabled_only=True)[:feed_limit]
+        synced=[]
+        for source in sources:
+            try:
+                synced.append(self.sync_discovery_source_v301(source.get("source_id")))
+            except Exception as exc:
+                synced.append({"source_id":source.get("source_id"),"error":str(exc)[:300]})
+        return {"sources":synced,"builtin_phishing_sources":builtins,
+                "ground_truth_write":False,"production_weight_write":False}
+
     def run_autonomous_discovery_iteration_v346(self, feed_limit=4, scan_limit=2):
         """One conservative autonomous iteration.
 

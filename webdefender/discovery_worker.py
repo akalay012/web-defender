@@ -5,6 +5,8 @@ The worker is opt-in. It never verifies ground truth and never promotes learned 
 import os
 import time
 import threading
+import subprocess
+import sys
 
 _LOCK=threading.Lock()
 _STARTED=False
@@ -30,7 +32,17 @@ def _loop():
             _trust_db_init()
             print("[DISCOVERY] Database schema ready", flush=True)
             from .engine import WebDefenderAnalyzer
-            WebDefenderAnalyzer().run_autonomous_discovery_iteration_v346(feed_limit,scan_limit)
+            analyzer=WebDefenderAnalyzer()
+            # Feed ingestion is bounded and cheap; keep it in the scheduler.
+            analyzer.run_autonomous_discovery_ingestion_v347(feed_limit)
+            # Candidate analysis is a detached job. The scheduler never joins/waits for it,
+            # so one hostile target cannot freeze future discovery cycles.
+            proc=subprocess.Popen(
+                [sys.executable,"-m","webdefender.discovery_queue_job",str(scan_limit)],
+                stdout=None,stderr=None,start_new_session=True,
+                close_fds=True
+            )
+            print(f"[DISCOVERY] Queue job launched | pid={proc.pid} | scan_limit={scan_limit} | detached=true",flush=True)
         except Exception as exc:
             # Never crash the web worker because an optional discovery iteration failed,
             # but never hide the failure from operators either.
