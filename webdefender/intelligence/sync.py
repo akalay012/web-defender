@@ -343,6 +343,40 @@ def _trust_db_init():
             candidates INTEGER DEFAULT 0,
             campaigns INTEGER DEFAULT 0,
             details TEXT)""")
+        con.execute("""CREATE TABLE IF NOT EXISTS discovery_scheduler_runs_v343(
+            run_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            due_sources INTEGER DEFAULT 0,
+            successful_sources INTEGER DEFAULT 0,
+            failed_sources INTEGER DEFAULT 0,
+            accepted_candidates INTEGER DEFAULT 0,
+            status TEXT NOT NULL,
+            details TEXT)""")
+        con.execute("""CREATE TABLE IF NOT EXISTS campaign_observation_links_v343(
+            observation_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            authority TEXT NOT NULL,
+            PRIMARY KEY(observation_id,campaign_id))""")
+        con.execute("""CREATE TABLE IF NOT EXISTS learning_proposals_v343(
+            proposal_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            verified_cases INTEGER NOT NULL,
+            malicious_cases INTEGER NOT NULL,
+            clean_cases INTEGER NOT NULL,
+            metrics TEXT NOT NULL,
+            family_metrics TEXT NOT NULL,
+            sensor_report TEXT NOT NULL,
+            proposed_weights TEXT NOT NULL,
+            status TEXT NOT NULL,
+            promotion_allowed INTEGER DEFAULT 0,
+            promotion_reason TEXT NOT NULL,
+            source_policy TEXT NOT NULL)""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_learning_proposals_v343 ON learning_proposals_v343(status,created_at)")
         con.execute("""CREATE TABLE IF NOT EXISTS zero_day_observations_v32(
             observation_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,

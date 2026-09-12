@@ -55,6 +55,26 @@ def v312_feed_sync():
     if sid: return jsonify(a.sync_discovery_source_v312(sid))
     return jsonify({"ok":True,"results":a.sync_due_feeds_v312(int(d.get("limit") or 8))})
 
+@app.post("/api/v34/discovery/cycle")
+def v343_discovery_cycle():
+    if not _admin_ok_v30(): return _admin_error_v30()
+    d=request.get_json(silent=True) or {}
+    return jsonify(_analyzer().run_discovery_cycle_v343(int(d.get("limit") or 8)))
+
+@app.post("/api/v34/learning/proposal")
+def v343_learning_proposal():
+    if not _admin_ok_v30(): return _admin_error_v30()
+    d=request.get_json(silent=True) or {}
+    return jsonify(_analyzer().build_verified_learning_proposal_v343(
+        int(d.get("limit") or 5000),int(d.get("min_cases") or 60)))
+
+@app.post("/api/v34/campaign/correlate")
+def v343_campaign_correlate():
+    if not _admin_ok_v30(): return _admin_error_v30()
+    d=request.get_json(silent=True) or {}
+    return jsonify(_analyzer().correlate_observation_campaign_v343(
+        str(d.get("observation_id") or "")))
+
 @app.get("/api/v31/feed/status")
 def v312_feed_status():
     if not _admin_ok_v30(): return _admin_error_v30()

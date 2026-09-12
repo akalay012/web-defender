@@ -409,6 +409,116 @@ class OperationalLearningMixin:
                 con.execute("UPDATE discovery_sources_v31 SET last_error=? WHERE source_id=?",(str(exc)[:500],source_id))
             return {"ok":False,"run_id":run_id,"error":str(exc)[:500],"backoff_seconds":backoff}
 
+    def run_discovery_cycle_v343(self, limit=8):
+        """Synchronize due discovery sources as candidate ingestion only.
+
+        This scheduler does not scan arbitrary internet ranges and never turns a feed hit
+        into a verdict or training label.
+        """
+        limit=max(1,min(32,int(limit)))
+        now=datetime.now(timezone.utc).isoformat()
+        run_id="ds_"+uuid.uuid4().hex[:20]
+        with db_connect(DB_PATH,timeout=10) as con:
+            due=con.execute("""SELECT COUNT(*) FROM discovery_sources_v31 s
+              LEFT JOIN feed_sync_state_v312 st ON st.source_id=s.source_id
+              WHERE s.enabled=1 AND s.source_type IN ('url_feed','ioc_feed')
+                AND (st.next_sync_at IS NULL OR st.next_sync_at<=?)""",(now,)).fetchone()[0]
+            con.execute("""INSERT INTO discovery_scheduler_runs_v343
+              (run_id,created_at,due_sources,status,details) VALUES(?,?,?,?,?)""",
+              (run_id,now,int(due or 0),"running",json.dumps({"limit":limit})))
+        results=self.sync_due_feeds_v312(limit)
+        ok=sum(1 for r in results if isinstance(r,dict) and r.get("ok"))
+        failed=len(results)-ok
+        accepted=sum(int((r or {}).get("accepted") or 0) for r in results if isinstance(r,dict))
+        finished=datetime.now(timezone.utc).isoformat()
+        with db_connect(DB_PATH,timeout=10) as con:
+            con.execute("""UPDATE discovery_scheduler_runs_v343 SET finished_at=?,successful_sources=?,
+              failed_sources=?,accepted_candidates=?,status=?,details=? WHERE run_id=?""",
+              (finished,ok,failed,accepted,"success" if failed==0 else "partial",
+               json.dumps({"results":results[:16]},ensure_ascii=False,default=str),run_id))
+        return {"ok":failed==0,"run_id":run_id,"due_sources":int(due or 0),
+                "synced_sources":len(results),"successful_sources":ok,"failed_sources":failed,
+                "accepted_candidates":accepted,
+                "authority":"candidate_ingestion_only",
+                "policy":"Feed/discovery sonucu yalnızca adaydır; motor kararı veya verified ground truth değildir."}
+
+    def build_verified_learning_proposal_v343(self, limit=5000, min_cases=60):
+        """Create a shadow calibration proposal exclusively from verified ground truth."""
+        limit=max(1,min(10000,int(limit))); min_cases=max(60,min(5000,int(min_cases)))
+        with db_connect(DB_PATH,timeout=15) as con:
+            rows=con.execute("""SELECT o.predicted_malicious,o.sensors_fired,g.label,g.family,g.confidence,
+              g.truth_id,g.source FROM verified_ground_truth_v301 g
+              JOIN live_observations_v301 o ON o.observation_id=g.observation_id
+              WHERE g.confidence>=0.90 ORDER BY g.verified_at DESC LIMIT ?""",(limit,)).fetchall()
+        parsed=[]; all_sensors=set()
+        for pred,sensors,label,family,confidence,truth_id,source in rows:
+            ss=set(json.loads(sensors or "[]")); all_sensors|=ss
+            parsed.append({"actual_malicious":str(label)=="malicious",
+                "predicted_malicious":bool(pred),"family":str(family or "general").lower(),
+                "sensors_fired":sorted(ss),"truth_id":truth_id,"confidence":float(confidence or 0),
+                "ground_truth_source":str(source or "")})
+        for row in parsed: row["all_sensors"]=sorted(all_sensors)
+        metrics=self.calibration_metrics_v29(parsed)
+        families=self.family_metrics_v30(parsed)
+        sensor_report=self.sensor_error_report_v29(parsed)
+        proposal=self.propose_calibration_v29(sensor_report)
+        fingerprint=hashlib.sha256(json.dumps(
+            [{"truth_id":r["truth_id"],"actual":r["actual_malicious"],"family":r["family"]} for r in parsed],
+            sort_keys=True).encode()).hexdigest()
+        malicious=sum(1 for r in parsed if r["actual_malicious"]); clean=len(parsed)-malicious
+        # A proposal is shadow-only. Eligibility merely means it may be reviewed/evaluated;
+        # it does not modify production weights.
+        enough=len(parsed)>=min_cases and malicious>0 and clean>0
+        reason=("verified dataset is eligible for shadow evaluation" if enough else
+                f"verified dataset insufficient/balanced cases required ({len(parsed)}/{min_cases})")
+        pid="lp_"+fingerprint[:20]
+        with db_connect(DB_PATH,timeout=12) as con:
+            con.execute("""INSERT INTO learning_proposals_v343
+              (proposal_id,created_at,dataset_fingerprint,verified_cases,malicious_cases,clean_cases,
+               metrics,family_metrics,sensor_report,proposed_weights,status,promotion_allowed,
+               promotion_reason,source_policy)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT(proposal_id) DO UPDATE SET created_at=excluded.created_at,
+               verified_cases=excluded.verified_cases,malicious_cases=excluded.malicious_cases,
+               clean_cases=excluded.clean_cases,metrics=excluded.metrics,family_metrics=excluded.family_metrics,
+               sensor_report=excluded.sensor_report,proposed_weights=excluded.proposed_weights,
+               status=excluded.status,promotion_allowed=excluded.promotion_allowed,
+               promotion_reason=excluded.promotion_reason""",
+              (pid,datetime.now(timezone.utc).isoformat(),fingerprint,len(parsed),malicious,clean,
+               json.dumps(metrics),json.dumps(families),json.dumps(sensor_report),json.dumps(proposal),
+               "shadow_candidate" if enough else "insufficient_data",0,reason,
+               "verified_ground_truth_only; no prediction/feed/campaign labels"))
+        return {"ok":True,"proposal_id":pid,"verified_cases":len(parsed),"malicious_cases":malicious,
+                "clean_cases":clean,"metrics":metrics,"family_metrics":families,
+                "shadow_weight_proposal":proposal,"eligible_for_evaluation":enough,
+                "promotion_allowed":False,
+                "policy":"Yalnızca verified ground truth kullanılır. Candidate/prediction/feed/campaign sonucu eğitim etiketi değildir; üretim ağırlıkları otomatik değişmez."}
+
+    def correlate_observation_campaign_v343(self, observation_id):
+        """Attach an observation to an explainable campaign candidate without changing its verdict."""
+        with db_connect(DB_PATH,timeout=10) as con:
+            row=con.execute("""SELECT registrable_domain,predicted_score,ground_truth_status
+              FROM live_observations_v301 WHERE observation_id=?""",(observation_id,)).fetchone()
+        if not row or not row[0]:
+            return {"ok":False,"error":"Observation/domain bulunamadı"}
+        detected=self.detect_campaign_v313("domain",row[0])
+        campaign=(detected or {}).get("campaign")
+        if not campaign:
+            return {"ok":True,"campaign":None,"verdict_effect":0,
+                    "ground_truth_effect":False,"reason":(detected or {}).get("reason")}
+        now=datetime.now(timezone.utc).isoformat()
+        conf=float(campaign.get("confidence") or 0)
+        with db_connect(DB_PATH,timeout=10) as con:
+            con.execute("""INSERT INTO campaign_observation_links_v343
+              (observation_id,campaign_id,created_at,relation,confidence,authority)
+              VALUES(?,?,?,?,?,?) ON CONFLICT(observation_id,campaign_id) DO UPDATE SET
+              confidence=excluded.confidence,created_at=excluded.created_at""",
+              (observation_id,campaign["campaign_id"],now,"bounded_graph_correlation",conf,
+               "context_only"))
+        return {"ok":True,"campaign":campaign,"verdict_effect":0,"ground_truth_effect":False,
+                "authority":"context_only",
+                "policy":"Campaign korelasyonu bağlamdır; tek başına scan verdict, score veya ground truth değiştirmez."}
+
     def detect_campaign_v313(self, seed_type, seed_value, max_nodes=180):
         """Bounded, explainable campaign clustering over persisted observations."""
         seed_type=str(seed_type or "").lower(); seed_value=str(seed_value or "").strip()
@@ -436,9 +546,12 @@ class OperationalLearningMixin:
             nodes.add((e["from_type"],e["from_value"])); nodes.add((e["to_type"],e["to_value"]))
         # Shared infrastructure alone is deliberately insufficient.
         strong=[e for e in all_edges if e["confidence"]>=0.75]
+        external_sources={"urlhaus","threatfox","openphish","phishtank"}
+        engine_strong=[e for e in strong if str(e.get("source") or "").strip().lower() not in external_sources]
         independent={e["group"] for e in strong}
-        meaningful=independent-{"graph_context","infrastructure"}
-        if len(nodes)<3 or not strong or (len(independent)<2 and not meaningful):
+        engine_independent={e["group"] for e in engine_strong}
+        meaningful=engine_independent-{"graph_context","infrastructure"}
+        if len(nodes)<3 or not strong or not engine_strong or (len(engine_independent)<2 and not meaningful):
             return {"ok":True,"campaign":None,"nodes":len(nodes),"edges":len(all_edges),
                     "reason":"Bağımsız ilişki kanıtı kampanya oluşturmak için yetersiz."}
         # Score independent modalities, graph density and strong-edge ratio. No trust subtraction.
@@ -460,7 +573,7 @@ class OperationalLearningMixin:
                       JOIN live_observations_v301 o ON o.observation_id=g.observation_id
                       WHERE o.registrable_domain=? AND g.label='malicious'""",(d,)).fetchall()
                     families.update(str(r[0]) for r in rows if r and r[0])
-        status="high_confidence_candidate" if conf>=.80 and len(independent)>=2 else "candidate"
+        status="high_confidence_candidate" if conf>=.80 and len(engine_independent)>=2 else "candidate"
         summary=f"{len(nodes)} node, {len(all_edges)} relation, {len(independent)} independent relation groups"
         with db_connect(DB_PATH,timeout=15) as con:
             con.execute("""INSERT INTO threat_campaigns_v313
@@ -488,6 +601,7 @@ class OperationalLearningMixin:
                    e["confidence"],json.dumps({"source":e["source"],"group":e["group"]})))
         return {"ok":True,"campaign":{"campaign_id":cid,"status":status,"confidence":round(conf,3),
           "nodes":len(nodes),"edges":len(all_edges),"independent_groups":sorted(independent),
+          "engine_independent_groups":sorted(engine_independent),
           "verified_threat_families":sorted(families),"summary":summary},
           "policy":"Campaign candidate ground truth değildir; shared hosting/IP tek başına malicious hüküm üretmez."}
 
