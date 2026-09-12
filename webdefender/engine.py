@@ -8,7 +8,8 @@ from .fusion.family_experts import ThreatFamilyExpertsMixin
 from .fusion.decision_pipeline import DecisionEvidenceMixin
 from .analyzer.operations import OperationalLearningMixin
 from .analyzer.residual_services import ResidualServicesMixin
-from .application import app, APP_NAME, APP_VERSION
+from .application import app
+from .metadata import APP_NAME, APP_VERSION
 
 class SecurityAnalyzer(
     ScanOrchestratorMixin,

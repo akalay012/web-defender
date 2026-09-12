@@ -14,7 +14,8 @@ from flask import request, jsonify, render_template_string
 
 from ..state import LEARNING_ENGINE, THREAT_INTEL_STORE
 from ..intelligence.sync import sync_all_threat_intel
-from ..application import app, APP_VERSION
+from ..application import app
+from ..metadata import APP_VERSION
 from .template import HTML_TEMPLATE
 from ..routes.policy import decision_payload
 

@@ -3,7 +3,7 @@
 Compatibility-era helper services used by the modular orchestrator. These
 helpers do not own HTTP routing or final presentation.
 """
-from ..application import APP_VERSION
+from ..metadata import APP_VERSION
 import os, re, json, time, hashlib, math, uuid
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse

@@ -3,7 +3,7 @@
 External feeds are sensors only. This module ingests and caches observations;
 it does not own Web Defender's final verdict.
 """
-from ..application import APP_VERSION
+from ..metadata import APP_VERSION
 import tempfile
 import os, re, json, time, hashlib, threading, csv, io
 from datetime import datetime, timezone

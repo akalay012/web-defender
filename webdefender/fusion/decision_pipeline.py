@@ -4,7 +4,7 @@ This mixin owns canonicalization/decision orchestration while pure fusion policy
 remains in fusion.policy. Historical observations are context, not automatic
 current-threat ground truth.
 """
-from ..application import APP_VERSION
+from ..metadata import APP_VERSION
 import re
 import uuid
 import json, hashlib, math, time, sqlite3
