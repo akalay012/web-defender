@@ -1,3 +1,6 @@
+import tempfile
+import subprocess
+import sys
 """Discovery, learning, campaign and calibration mixin.
 
 These subsystems evolve observations and regression knowledge. They do not own
@@ -510,10 +513,31 @@ class OperationalLearningMixin:
                 print(f"[DISCOVERY] Scan started | url={log_url} | attempt={attempt_no} | feed_off=true", flush=True)
                 # Feed OFF is intentional: external intelligence may remain visible, but
                 # cannot carry the engine verdict for autonomous discovery evaluation.
-                child=WebDefenderAnalyzer(url,feed_off=True)
-                result=child.analyze_url(url)
+                # Autonomous candidates are scanned in a separate process so a hostile,
+                # broken or indefinitely-stalling target can never freeze the queue.
+                _scan_timeout=max(30,min(85,int(os.getenv("WEB_DEFENDER_DISCOVERY_SCAN_TIMEOUT_SECONDS","75") or 75)))
+                _tmp=tempfile.NamedTemporaryFile(prefix="wd-discovery-",suffix=".json",delete=False)
+                _tmp_path=_tmp.name; _tmp.close()
+                try:
+                    _proc=subprocess.run(
+                        [sys.executable,"-m","webdefender.discovery_scan_runner",url,_tmp_path],
+                        stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,
+                        timeout=_scan_timeout,check=False
+                    )
+                    if _proc.returncode!=0:
+                        raise RuntimeError("isolated scan exited "+str(_proc.returncode)+": "+str(_proc.stderr or "")[-240:])
+                    with open(_tmp_path,"r",encoding="utf-8") as _fh:
+                        result=json.load(_fh)
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError(f"isolated scan hard timeout after {_scan_timeout}s")
+                finally:
+                    try: os.unlink(_tmp_path)
+                    except OSError: pass
                 if not isinstance(result,dict) or result.get("error"):
                     raise RuntimeError(str((result or {}).get("error") or "scan failed"))
+                # Persist the isolated result through the existing candidate-observation path.
+                child=WebDefenderAnalyzer()
+                child.results=result
                 oid=child.record_live_observation_v301(item_id)
                 observations+=1; scanned+=1
                 corr=child.correlate_observation_campaign_v343(oid)
