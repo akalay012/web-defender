@@ -1,0 +1,9 @@
+Flask>=3.0,<4
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+dnspython>=2.6,<3
+playwright==1.62.0
+gunicorn>=22,<24
+tldextract>=5.1,<6
+Pillow>=10,<12
+psycopg[binary]>=3.2,<4
