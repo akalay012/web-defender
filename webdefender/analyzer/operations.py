@@ -1,3 +1,4 @@
+import signal
 import tempfile
 import subprocess
 import sys
@@ -339,7 +340,16 @@ class OperationalLearningMixin:
                       consecutive_failures=0,backoff_seconds=0,last_success_at=excluded.last_success_at,last_error=NULL""",
                       (source_id,st[0] if st else None,st[1] if st else None,(now+timedelta(minutes=30)).isoformat(),now.isoformat()))
                 return {"ok":True,"status":"not_modified","run_id":run_id}
-            if resp.status_code!=200: raise RuntimeError("HTTP "+str(resp.status_code))
+            if resp.status_code!=200:
+                _loc=str(resp.headers.get("Location") or "")
+                if 300 <= resp.status_code < 400 and _loc:
+                    try:
+                        _lp=urlparse(urljoin(feed_url,_loc))
+                        _safe_loc=f"{_lp.scheme}://{_lp.netloc}{_lp.path}"[:240]
+                    except Exception:
+                        _safe_loc="[unparseable]"
+                    raise RuntimeError("HTTP "+str(resp.status_code)+" redirect="+_safe_loc)
+                raise RuntimeError("HTTP "+str(resp.status_code))
             chunks=[]; total=0
             for chunk in resp.iter_content(65536):
                 if not chunk: continue
@@ -519,17 +529,30 @@ class OperationalLearningMixin:
                 _tmp=tempfile.NamedTemporaryFile(prefix="wd-discovery-",suffix=".json",delete=False)
                 _tmp_path=_tmp.name; _tmp.close()
                 try:
-                    _proc=subprocess.run(
+                    # Do not use subprocess.run(..., stderr=PIPE) here. Browser descendants
+                    # can inherit the pipe and keep communicate() blocked even after the direct
+                    # child is killed. A new POSIX process group lets us terminate the complete
+                    # scan tree at the deadline.
+                    _proc=subprocess.Popen(
                         [sys.executable,"-m","webdefender.discovery_scan_runner",url,_tmp_path],
-                        stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,
-                        timeout=_scan_timeout,check=False
+                        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                        text=True,start_new_session=True
                     )
-                    if _proc.returncode!=0:
-                        raise RuntimeError("isolated scan exited "+str(_proc.returncode)+": "+str(_proc.stderr or "")[-240:])
+                    try:
+                        _rc=_proc.wait(timeout=_scan_timeout)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(_proc.pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            try: _proc.kill()
+                            except Exception: pass
+                        try: _proc.wait(timeout=5)
+                        except Exception: pass
+                        raise RuntimeError(f"isolated scan hard timeout after {_scan_timeout}s")
+                    if _rc!=0:
+                        raise RuntimeError("isolated scan exited "+str(_rc))
                     with open(_tmp_path,"r",encoding="utf-8") as _fh:
                         result=json.load(_fh)
-                except subprocess.TimeoutExpired:
-                    raise RuntimeError(f"isolated scan hard timeout after {_scan_timeout}s")
                 finally:
                     try: os.unlink(_tmp_path)
                     except OSError: pass
