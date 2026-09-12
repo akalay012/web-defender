@@ -382,7 +382,11 @@ class ScanOrchestratorMixin:
             self.add_finding("Etkileşim tetiklenmeden kanıtlanan hassas veri → harici hedef yolu","critical",
                 "Sayfanın kendi HTML/JavaScript kaynağında, kullanıcı etkileşimiyle çalışacak handler içinde hassas veri okuması ile farklı registrable domaine açık yazma hedefi aynı sınırlı kod yolunda kanıtlandı. Handler çalıştırılmadı.",
                 "credential_theft",json.dumps({"paths":proven[:8]},ensure_ascii=False),.98)
-            self.results["findings"][-1].update({"producer":"non_executing_interaction_v324","source_expert":"static_submission_exfil","independent_group":"static_source","evidence_lineage_id":"v324-nonexec-sensitive-crossroot"})
+            self.results["findings"][-1].update({
+                "producer":"non_executing_interaction_v341_sensor","source_expert":"static_submission_exfil",
+                "independent_group":"static_source","evidence_lineage_id":"v341-nonexec-sensitive-crossroot",
+                "score_eligible_v322":False,"context_only":True,"promotion_authority":"evidence_bus_v3236"
+            })
         self.results["non_executing_interaction_v324"]=report
         return report
 

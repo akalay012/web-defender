@@ -591,12 +591,16 @@ class DecisionEvidenceMixin:
             raw=json.dumps({"expert":expert,"modality":modality,"title":title,"detail":detail,
                             "source_event":source_event},ensure_ascii=False,sort_keys=True,default=str)
             lineage=hashlib.sha256(raw.encode()).hexdigest()[:24]
+            origin_raw=json.dumps({"modality":modality,"source_event":source_event,"detail":detail},
+                                  ensure_ascii=False,sort_keys=True,default=str)
+            origin_lineage=hashlib.sha256(origin_raw.encode()).hexdigest()[:24]
             dedupe=(expert,lineage)
             if dedupe in seen: return None
             seen.add(dedupe)
             eid="EV-"+hashlib.sha256((lineage+"|v3236").encode()).hexdigest()[:20]
             ev={"event_id":eid,"lineage_id":lineage,"producer":"evidence_bus_v3236",
-                "source_producer":"zero_day_behavior_v32","expert_family":expert,
+                "source_producer":"non_executing_interaction_v341" if str(source_event or "").startswith("nonexec:") else "zero_day_behavior_v32",
+                "expert_family":expert,"origin_lineage_id":origin_lineage,
                 "modality":modality,"title":str(title or expert)[:300],
                 "observation":str(detail or "")[:1200],"confidence":round(float(confidence or 0),3),
                 "weight":float(weight or 0),"causal":bool(causal),"feed_independent":True,
@@ -608,6 +612,34 @@ class DecisionEvidenceMixin:
             fam=norm_family(item.get("family")); grp=str(item.get("group") or fam).lower()
             emit(fam,grp,item.get("title"),item.get("detail"),item.get("confidence",.5),item.get("weight",0),
                  source_event=item.get("event_id"),causal=(grp=="credential_flow" and "harici" in str(item.get("detail") or "").lower()))
+
+        # V34.1.1: non-executing interaction analysis enters the canonical bus here.
+        # Potential paths never enter the voting event list.
+        nonexec=self.results.get("non_executing_interaction_v324") or {}
+        nonexec_proven=nonexec.get("proven_static_paths") or []
+        nonexec_potential=nonexec.get("potential_static_paths") or []
+        for path in nonexec_proven[:40]:
+            if not isinstance(path,dict): continue
+            if not (path.get("carries_sensitive") and path.get("cross_root") and path.get("destination")):
+                continue
+            detail=json.dumps({"event":path.get("event"),"handler":path.get("handler"),
+                "destination":path.get("destination"),"destination_root":path.get("destination_root"),
+                "tainted_variables":path.get("tainted_variables") or []},
+                ensure_ascii=False,sort_keys=True,default=str)
+            src="nonexec:"+hashlib.sha256(detail.encode()).hexdigest()[:20]
+            emit("credential_theft","static_source_sink","Statik handler: hassas kaynak → harici hedef",
+                 detail,.98,34,source_event=src,causal=True)
+            emit("javascript","static_source_sink","JavaScript handler içinde kanıtlanan veri aktarım yolu",
+                 detail,.94,18,source_event=src,causal=True)
+
+        nonexec_context=[]
+        for path in nonexec_potential[:30]:
+            if not isinstance(path,dict): continue
+            nonexec_context.append({"level":"potential_path","score_eligible":False,
+                "event":path.get("event"),"handler":path.get("handler"),
+                "sensitive_read":bool(path.get("sensitive_read")),
+                "write_sink_count":len(path.get("write_sinks") or []),
+                "reason":"Causality or explicit unrelated destination is incomplete."})
 
         # Also import concrete V32.3.4 causal chains, but only as their own lineage.
         brain=self.results.get("behavioral_brain_v3234") or {}
@@ -670,6 +702,9 @@ class DecisionEvidenceMixin:
              "independent_modalities":sorted(independent_modalities),"expert_families":sorted(by_expert),
              "fusion_score":fusion_score,"promoted":promoted,"feed_independent":True,
              "zero_day_source_score":z.get("score"),
+             "non_executing_interaction":{"proven_event_count":sum(1 for e in events if e.get("modality")=="static_source_sink"),
+                 "potential_context":nonexec_context,"potential_context_count":len(nonexec_context),
+                 "rule":"proven static paths may vote; potential paths are context-only"},
              "principle":"Producer score is not copied; typed observations with lineage are fused."}
         self.results["evidence_bus_v3236"]=out
         return out
