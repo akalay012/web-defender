@@ -215,6 +215,17 @@ def _trust_db_init():
             last_error TEXT,
             UNIQUE(url_hash,source))""")
         con.execute("CREATE INDEX IF NOT EXISTS idx_discovery_status_v301 ON discovery_queue_v301(status,priority,discovered_at)")
+        con.execute("""CREATE TABLE IF NOT EXISTS discovery_scan_runs_v344(
+            run_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            claimed INTEGER DEFAULT 0,
+            scanned INTEGER DEFAULT 0,
+            failed INTEGER DEFAULT 0,
+            observations INTEGER DEFAULT 0,
+            campaigns INTEGER DEFAULT 0,
+            status TEXT NOT NULL,
+            details TEXT)""")
         con.execute("""CREATE TABLE IF NOT EXISTS live_observations_v301(
             observation_id TEXT PRIMARY KEY,
             item_id TEXT,

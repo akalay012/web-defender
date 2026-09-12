@@ -409,6 +409,87 @@ class OperationalLearningMixin:
                 con.execute("UPDATE discovery_sources_v31 SET last_error=? WHERE source_id=?",(str(exc)[:500],source_id))
             return {"ok":False,"run_id":run_id,"error":str(exc)[:500],"backoff_seconds":backoff}
 
+    def process_discovery_queue_v344(self, limit=4):
+        """Analyze a bounded batch of already-ingested candidates.
+
+        Candidates are claimed transactionally, scanned with Feed OFF as the engine KPI,
+        persisted as candidate observations, and correlated to campaigns as context only.
+        No candidate/prediction/campaign result becomes verified ground truth.
+        """
+        limit=max(1,min(12,int(limit)))
+        now=datetime.now(timezone.utc).isoformat()
+        run_id="scan_"+uuid.uuid4().hex[:20]
+        claimed=[]
+        with db_connect(DB_PATH,timeout=12) as con:
+            rows=con.execute("""SELECT item_id,url,attempts FROM discovery_queue_v301
+              WHERE status IN ('queued','retry')
+                AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+              ORDER BY priority DESC,discovered_at ASC LIMIT ?""",(now,limit)).fetchall()
+            for item_id,url,attempts in rows:
+                cur=con.execute("""UPDATE discovery_queue_v301 SET status='scanning',attempts=attempts+1,
+                    last_error=NULL WHERE item_id=? AND status IN ('queued','retry')""",(item_id,))
+                if getattr(cur,"rowcount",1)!=0:
+                    claimed.append((item_id,url,int(attempts or 0)+1))
+            con.execute("""INSERT INTO discovery_scan_runs_v344
+              (run_id,created_at,claimed,status,details) VALUES(?,?,?,?,?)""",
+              (run_id,now,len(claimed),"running",json.dumps({"limit":limit})))
+
+        scanned=failed=observations=campaigns=0; reports=[]
+        # Local import avoids an engine/operations circular import at module import time.
+        from ..engine import WebDefenderAnalyzer
+        for item_id,url,attempt_no in claimed:
+            try:
+                # Feed OFF is intentional: external intelligence may remain visible, but
+                # cannot carry the engine verdict for autonomous discovery evaluation.
+                child=WebDefenderAnalyzer(url,feed_off=True)
+                result=child.analyze_url(url)
+                if not isinstance(result,dict) or result.get("error"):
+                    raise RuntimeError(str((result or {}).get("error") or "scan failed"))
+                oid=child.record_live_observation_v301(item_id)
+                observations+=1; scanned+=1
+                corr=child.correlate_observation_campaign_v343(oid)
+                if (corr or {}).get("campaign"): campaigns+=1
+                with db_connect(DB_PATH,timeout=10) as con:
+                    con.execute("""UPDATE discovery_queue_v301 SET status='observed',
+                      next_attempt_at=NULL,last_error=NULL WHERE item_id=?""",(item_id,))
+                reports.append({"item_id":item_id,"observation_id":oid,
+                    "engine_score":float(result.get("risk_score") or 0),
+                    "ground_truth_status":"candidate",
+                    "campaign_id":((corr or {}).get("campaign") or {}).get("campaign_id")})
+            except Exception as exc:
+                failed+=1
+                # Bounded exponential retry, then terminal failure. Never infinite-spin.
+                delay=min(86400,300*(2**min(attempt_no,8)))
+                next_at=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat()
+                status="failed" if attempt_no>=5 else "retry"
+                with db_connect(DB_PATH,timeout=10) as con:
+                    con.execute("""UPDATE discovery_queue_v301 SET status=?,next_attempt_at=?,
+                      last_error=? WHERE item_id=?""",(status,next_at,str(exc)[:500],item_id))
+                reports.append({"item_id":item_id,"error":str(exc)[:240],"status":status})
+
+        finished=datetime.now(timezone.utc).isoformat()
+        with db_connect(DB_PATH,timeout=10) as con:
+            con.execute("""UPDATE discovery_scan_runs_v344 SET finished_at=?,scanned=?,failed=?,
+              observations=?,campaigns=?,status=?,details=? WHERE run_id=?""",
+              (finished,scanned,failed,observations,campaigns,
+               "success" if failed==0 else ("partial" if scanned else "failed"),
+               json.dumps({"reports":reports[:12]},ensure_ascii=False,default=str),run_id))
+        return {"ok":failed==0,"run_id":run_id,"claimed":len(claimed),"scanned":scanned,
+                "failed":failed,"observations":observations,"campaigns":campaigns,
+                "feed_off":True,"ground_truth_effect":False,"reports":reports,
+                "policy":"Candidate → Feed OFF scan → candidate observation → context-only campaign. Verified ground truth yalnızca ayrı doğrulama hattından gelir."}
+
+    def run_production_discovery_pipeline_v344(self, feed_limit=8, scan_limit=4):
+        """One bounded production iteration: ingest due sources, then scan queued candidates."""
+        ingestion=self.run_discovery_cycle_v343(feed_limit)
+        scanning=self.process_discovery_queue_v344(scan_limit)
+        learning=self.build_verified_learning_proposal_v343(limit=5000,min_cases=60)
+        return {"ok":bool(ingestion.get("ok")) and bool(scanning.get("ok")),
+                "ingestion":ingestion,"scanning":scanning,"learning_shadow":learning,
+                "automatic_weight_promotion":False,
+                "internet_wide_crawling":False,
+                "policy":"Observe → Learn → Evolve; öğrenme yalnızca verified ground truth ile, production ağırlıklarına otomatik terfi yok."}
+
     def run_discovery_cycle_v343(self, limit=8):
         """Synchronize due discovery sources as candidate ingestion only.
 
