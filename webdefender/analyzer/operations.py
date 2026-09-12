@@ -545,6 +545,11 @@ class OperationalLearningMixin:
                 _tmp_path=_tmp.name; _tmp.close()
                 _hb=tempfile.NamedTemporaryFile(prefix="wd-discovery-hb-",suffix=".json",delete=False)
                 _hb_path=_hb.name; _hb.close()
+                _done=tempfile.NamedTemporaryFile(prefix="wd-discovery-done-",suffix=".flag",delete=False)
+                _done_path=_done.name; _done.close()
+                try: os.unlink(_done_path)
+                except OSError: pass
+                _supervisor=None
                 try:
                     # Do not use subprocess.run(..., stderr=PIPE) here. Browser descendants
                     # can inherit the pipe and keep communicate() blocked even after the direct
@@ -554,6 +559,14 @@ class OperationalLearningMixin:
                         [sys.executable,"-m","webdefender.discovery_scan_runner",url,_tmp_path,_hb_path],
                         stdout=None,stderr=None,text=True,start_new_session=True
                     )
+                    # A separate process owns the absolute wall-clock kill. It does not
+                    # depend on this queue job's Python thread/GIL/event loop continuing.
+                    _supervisor=subprocess.Popen(
+                        [sys.executable,"-m","webdefender.discovery_scan_supervisor",
+                         str(_proc.pid),str(_scan_timeout),_done_path],
+                        stdout=None,stderr=None,start_new_session=True,close_fds=True
+                    )
+                    print(f"[DISCOVERY-WATCHDOG] external supervisor armed | analyzer_pid={_proc.pid} | supervisor_pid={_supervisor.pid} | timeout={_scan_timeout}s",flush=True)
                     _deadline=time.monotonic()+_scan_timeout
                     _last_report=0.0
                     _rc=None
@@ -581,12 +594,21 @@ class OperationalLearningMixin:
                         try: _proc.wait(timeout=5)
                         except Exception: pass
                         raise RuntimeError(f"isolated scan watchdog timeout after {_scan_timeout}s | last_stage={_stage} | state={_state}")
+                    try:
+                        with open(_done_path,"w",encoding="utf-8") as _df: _df.write("done")
+                    except Exception: pass
                     if _rc!=0:
                         raise RuntimeError("isolated scan exited "+str(_rc))
                     with open(_tmp_path,"r",encoding="utf-8") as _fh:
                         result=json.load(_fh)
                 finally:
-                    for _cleanup in (_tmp_path,_hb_path):
+                    try:
+                        with open(_done_path,"w",encoding="utf-8") as _df: _df.write("done")
+                    except Exception: pass
+                    if _supervisor is not None and _supervisor.poll() is None:
+                        try: _supervisor.terminate()
+                        except Exception: pass
+                    for _cleanup in (_tmp_path,_hb_path,_done_path):
                         try: os.unlink(_cleanup)
                         except OSError: pass
                 if not isinstance(result,dict) or result.get("error"):

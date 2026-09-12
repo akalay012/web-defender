@@ -87,6 +87,7 @@ class ScanOrchestratorMixin:
             response, redirect_chain, final_url, connection_attempts, used_http_fallback = self.fetch_with_scheme_fallback(session, url)
             self._stage_heartbeat_v3477("http_fetch","exit")
 
+            self._stage_heartbeat_v3477("http_postprocess","enter")
             # V32.3.15 — generic observation recovery for a common hostname-shape failure.
             # Some tenant/hosted applications exist at tenant.platform.tld but a user
             # (or phishing feed) supplies www.tenant.platform.tld. The extra `www` may
@@ -235,10 +236,13 @@ class ScanOrchestratorMixin:
                 msg += " | PythonAnywhere outbound allowlist/proxy kısıtı olası; bu hata hedef siteye atfedilmemelidir."
             self.results["errors"].append({"module": "http", "error": msg})
 
+        self._stage_heartbeat_v3477("http_postprocess","exit")
         # Derin analizde Chromium davranış katmanı HER public HTTP(S) hedefte çalışır.
         # SPA/React/Vue/Next sayfalarında statik 200 yanıtı gerçek DOM'u göstermeyebilir.
         # Worker hiçbir formu doldurmaz/göndermez; yalnızca yükleme sırasında oluşan DOM ve ağ davranışını gözlemler.
+        self._stage_heartbeat_v3477("browser","enter")
         self.run_browser_worker(self.results.get("final_url") or url)
+        self._stage_heartbeat_v3477("browser","exit")
         self.run_check("content_acquisition_v32316", self.finalize_content_acquisition_v32316, url)
 
         # ── Katman 3: TLS ve yardımcı kontroller ──────────────────────────
