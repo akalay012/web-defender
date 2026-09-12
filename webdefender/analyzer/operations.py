@@ -470,14 +470,10 @@ class OperationalLearningMixin:
         print(f"[DISCOVERY] Built-in phishing sources ready | sources={len(builtins.get('sources') or [])} | target_per_source=20", flush=True)
         self.recover_stale_discovery_leases_v346()
         feed_limit=max(1,min(8,int(feed_limit)))
-        # Reuse the existing source synchronizer without entering queue processing.
-        sources=self.list_discovery_sources_v301(enabled_only=True)[:feed_limit]
-        synced=[]
-        for source in sources:
-            try:
-                synced.append(self.sync_discovery_source_v301(source.get("source_id")))
-            except Exception as exc:
-                synced.append({"source_id":source.get("source_id"),"error":str(exc)[:300]})
+        # Use the existing V31.2 due-feed scheduler. This keeps conditional GET,
+        # backoff, provenance and per-source queue_target behavior in one authority,
+        # while deliberately stopping before candidate scanning.
+        synced=self.sync_due_feeds_v312(feed_limit)
         return {"sources":synced,"builtin_phishing_sources":builtins,
                 "ground_truth_write":False,"production_weight_write":False}
 
