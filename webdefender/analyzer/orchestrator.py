@@ -3,6 +3,7 @@
 The orchestrator orders sensors, guards, experts and final decision authority.
 It does not redefine their evidence semantics.
 """
+from ..analyzer.url_domain import get_root_domain
 from ..analyzer.url_domain import host_is_raw_ip
 from ..analyzer.url_domain import normalize_url
 from ..metadata import RUNNING_ON_PYTHONANYWHERE
