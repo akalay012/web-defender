@@ -374,10 +374,13 @@ class OperationalLearningMixin:
                 if h in seen: continue
                 seen.add(h); normalized.append(nu)
             accepted=0; dup=0
+            queue_target=max(1,min(100,int(cfg.get("queue_target") or max_items)))
             for u in normalized:
+                if accepted>=queue_target: break
                 r=self.enqueue_discovery_v301(u,source=f"v31:{source_id}",source_ref=name,priority=int(cfg.get("priority") or 65))
                 if r.get("ok"): accepted+=1
                 else: rejected+=1
+            print(f"[DISCOVERY] Source sync | source={name} | fetched={len(urls)} | normalized={len(normalized)} | queued={accepted} | rejected={rejected} | target={queue_target}", flush=True)
             etag=resp.headers.get("ETag"); lm=resp.headers.get("Last-Modified")
             done=datetime.now(timezone.utc)
             interval=max(15,min(1440,int(cfg.get("interval_minutes") or 30)))
@@ -453,10 +456,13 @@ class OperationalLearningMixin:
         """
         from ..intelligence.sync import _trust_db_init
         _trust_db_init()
+        builtins=self.ensure_builtin_phishing_sources_v347()
+        print(f"[DISCOVERY] Built-in phishing sources ready | sources={len(builtins.get('sources') or [])} | target_per_source=20", flush=True)
         self.recover_stale_discovery_leases_v346()
         feed_limit=max(1,min(8,int(feed_limit)))
         scan_limit=max(1,min(4,int(scan_limit)))
         result=self.run_production_discovery_pipeline_v344(feed_limit,scan_limit)
+        result["builtin_phishing_sources"]=builtins
         result["autonomous_iteration"]=True
         result["feed_limit"]=feed_limit
         result["scan_limit"]=scan_limit
@@ -495,7 +501,12 @@ class OperationalLearningMixin:
         from ..engine import WebDefenderAnalyzer
         for item_id,url,attempt_no in claimed:
             try:
-                print(f"[DISCOVERY] Scan started | url={url} | attempt={attempt_no} | feed_off=true", flush=True)
+                try:
+                    _lp=urlparse(url)
+                    log_url=urlunparse((_lp.scheme,_lp.netloc,_lp.path,"","[redacted]" if _lp.query else "",""))
+                except Exception:
+                    log_url=str(url).split("?",1)[0]
+                print(f"[DISCOVERY] Scan started | url={log_url} | attempt={attempt_no} | feed_off=true", flush=True)
                 # Feed OFF is intentional: external intelligence may remain visible, but
                 # cannot carry the engine verdict for autonomous discovery evaluation.
                 child=WebDefenderAnalyzer(url,feed_off=True)
@@ -515,7 +526,7 @@ class OperationalLearningMixin:
                     "engine_score":score,
                     "ground_truth_status":"candidate",
                     "campaign_id":((corr or {}).get("campaign") or {}).get("campaign_id")})
-                print(f"[DISCOVERY] Scan finished | url={url} | threat={score:g} | verdict={verdict} | observation={oid}", flush=True)
+                print(f"[DISCOVERY] Scan finished | url={log_url} | threat={score:g} | verdict={verdict} | observation={oid}", flush=True)
             except Exception as exc:
                 failed+=1
                 # Bounded exponential retry, then terminal failure. Never infinite-spin.
@@ -526,7 +537,7 @@ class OperationalLearningMixin:
                     con.execute("""UPDATE discovery_queue_v301 SET status=?,next_attempt_at=?,
                       last_error=? WHERE item_id=?""",(status,next_at,str(exc)[:500],item_id))
                 reports.append({"item_id":item_id,"error":str(exc)[:240],"status":status})
-                print(f"[DISCOVERY][ERROR] Scan failed | url={url} | status={status} | error={str(exc)[:240]}", flush=True)
+                print(f"[DISCOVERY][ERROR] Scan failed | url={log_url} | status={status} | error={str(exc)[:240]}", flush=True)
 
         finished=datetime.now(timezone.utc).isoformat()
         with db_connect(DB_PATH,timeout=10) as con:
@@ -551,6 +562,33 @@ class OperationalLearningMixin:
                 "automatic_weight_promotion":False,
                 "internet_wide_crawling":False,
                 "policy":"Observe → Learn → Evolve; öğrenme yalnızca verified ground truth ile, production ağırlıklarına otomatik terfi yok."}
+
+    def ensure_builtin_phishing_sources_v347(self):
+        """Register current phishing discovery sensors.
+
+        Feed entries are candidates only. They never become engine verdicts or training
+        ground truth merely because a provider listed them.
+        """
+        sources=[
+            ("OpenPhish Community","url_feed","verified_external",{
+                "url":"https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt",
+                "format":"lines","max_items":80,"queue_target":20,"interval_minutes":720,
+                "priority":72,"timeout":15,"max_bytes":2097152,"category":"phishing"
+            }),
+            ("PhishTank Online Valid","url_feed","verified_external",{
+                "url":"https://data.phishtank.com/data/online-valid.json",
+                "format":"json","max_items":80,"queue_target":20,"interval_minutes":360,
+                "priority":72,"timeout":20,"max_bytes":8388608,"category":"phishing",
+                "items_key":"urls","url_key":"url","top_level_list":True
+            }),
+        ]
+        out=[]
+        for name,stype,trust,cfg in sources:
+            r=self.register_discovery_source_v31(name,stype,trust,cfg)
+            out.append({"name":name,**r})
+        return {"ok":all(x.get("ok") for x in out),"sources":out,
+                "target_per_source":20,
+                "policy":"Provider listing = discovery candidate only; Feed OFF engine scan remains authoritative for Web Defender prediction."}
 
     def run_discovery_cycle_v343(self, limit=8):
         """Synchronize due discovery sources as candidate ingestion only.
