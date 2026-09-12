@@ -16,46 +16,32 @@ from ..application import app, APP_VERSION
 from .template import HTML_TEMPLATE
 from ..routes.policy import decision_payload
 
-# Stable aliases to existing implementation while route extraction proceeds.
-_admin_ok_v30=_core._admin_ok_v30
-_admin_error_v30=_core._admin_error_v30
-v31_source_register=_core.v31_source_register
-v312_feed_sync=_core.v312_feed_sync
-v312_feed_status=_core.v312_feed_status
-v31_source_ingest=_core.v31_source_ingest
-v32_zero_day_status=_core.v32_zero_day_status
-v313_campaign_detect=_core.v313_campaign_detect
-v313_campaign_observation=_core.v313_campaign_observation
-v313_campaign_status=_core.v313_campaign_status
-v31_hunt_expand=_core.v31_hunt_expand
-v31_status=_core.v31_status
-discovery_enqueue_v301=_core.discovery_enqueue_v301
-discovery_status_api_v301=_core.discovery_status_api_v301
-discovery_verify_v301=_core.discovery_verify_v301
-discovery_regression_v301=_core.discovery_regression_v301
-evolution_snapshot_v30=_core.evolution_snapshot_v30
-evolution_family_guard_v30=_core.evolution_family_guard_v30
-evolution_drift_v30=_core.evolution_drift_v30
-evolution_promote_v30=_core.evolution_promote_v30
-evolution_rollback_v30=_core.evolution_rollback_v30
-calibration_evaluate_v29=_core.calibration_evaluate_v29
-calibration_compare_v29=_core.calibration_compare_v29
-visual_baseline_enroll_v27=_core.visual_baseline_enroll_v27
-feedback_v26=_core.feedback_v26
-trust_context_status_v21=_core.trust_context_status_v21
-trust_context_sync_v21=_core.trust_context_sync_v21
+# Canonical route dependencies. No compatibility-core aliases.
+def _analyzer():
+    from ..engine import SecurityAnalyzer
+    return SecurityAnalyzer()
+
+def _admin_ok_v30():
+    expected=(os.getenv("WEB_DEFENDER_ADMIN_TOKEN") or "").strip()
+    supplied=(request.headers.get("X-Web-Defender-Admin") or request.args.get("admin_token") or "").strip()
+    return bool(expected) and supplied == expected
+
+def _admin_error_v30():
+    if not (os.getenv("WEB_DEFENDER_ADMIN_TOKEN") or "").strip():
+        return jsonify({"error":"WEB_DEFENDER_ADMIN_TOKEN yapılandırılmamış."}),503
+    return jsonify({"error":"Yetkisiz."}),401
 
 @app.post("/api/v31/source/register")
 def v31_source_register():
     if not _admin_ok_v30(): return _admin_error_v30()
-    d=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    d=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.register_discovery_source_v31(str(d.get("name") or ""),str(d.get("source_type") or ""),
         str(d.get("trust_level") or "contextual"),d.get("config") or {}))
 
 @app.post("/api/v31/feed/sync")
 def v312_feed_sync():
     if not _admin_ok_v30(): return _admin_error_v30()
-    d=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    d=request.get_json(silent=True) or {}; a=_analyzer()
     sid=str(d.get("source_id") or "")
     if sid: return jsonify(a.sync_discovery_source_v312(sid))
     return jsonify({"ok":True,"results":a.sync_due_feeds_v312(int(d.get("limit") or 8))})
@@ -63,23 +49,23 @@ def v312_feed_sync():
 @app.get("/api/v31/feed/status")
 def v312_feed_status():
     if not _admin_ok_v30(): return _admin_error_v30()
-    return jsonify({"ok":True,**SecurityAnalyzer().feed_sync_status_v312()})
+    return jsonify({"ok":True,**_analyzer().feed_sync_status_v312()})
 
 @app.post("/api/v31/source/ingest")
 def v31_source_ingest():
     if not _admin_ok_v30(): return _admin_error_v30()
-    d=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    d=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.ingest_discovery_urls_v31(str(d.get("source_id") or ""),d.get("urls") or []))
 
 @app.get("/api/v32/zero-day/status")
 def v32_zero_day_status():
     if not _admin_ok_v30(): return _admin_error_v30()
-    return jsonify({"ok":True,**SecurityAnalyzer().zero_day_status_v32(int(request.args.get("limit","50")))})
+    return jsonify({"ok":True,**_analyzer().zero_day_status_v32(int(request.args.get("limit","50")))})
 
 @app.post("/api/v31/campaign/detect")
 def v313_campaign_detect():
     if not _admin_ok_v30(): return _admin_error_v30()
-    d=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    d=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.detect_campaign_v313(str(d.get("seed_type") or "domain"),
         str(d.get("seed_value") or ""),int(d.get("max_nodes") or 180)))
 
@@ -87,41 +73,41 @@ def v313_campaign_detect():
 def v313_campaign_observation():
     if not _admin_ok_v30(): return _admin_error_v30()
     d=request.get_json(silent=True) or {}
-    return jsonify(SecurityAnalyzer().auto_campaign_from_observation_v313(str(d.get("observation_id") or "")))
+    return jsonify(_analyzer().auto_campaign_from_observation_v313(str(d.get("observation_id") or "")))
 
 @app.get("/api/v31/campaign/status")
 def v313_campaign_status():
     if not _admin_ok_v30(): return _admin_error_v30()
-    return jsonify({"ok":True,**SecurityAnalyzer().campaign_status_v313(int(request.args.get("limit","50")))})
+    return jsonify({"ok":True,**_analyzer().campaign_status_v313(int(request.args.get("limit","50")))})
 
 @app.post("/api/v31/hunt/expand")
 def v31_hunt_expand():
     if not _admin_ok_v30(): return _admin_error_v30()
-    d=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    d=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.expand_threat_hunt_v31(str(d.get("observation_id") or ""),int(d.get("max_depth") or 1)))
 
 @app.get("/api/v31/status")
 def v31_status():
     if not _admin_ok_v30(): return _admin_error_v30()
-    a=SecurityAnalyzer()
+    a=_analyzer()
     return jsonify({"ok":True,"persistence":a.persistence_status_v31(),"discovery":a.discovery_status_v301()})
 
 @app.post("/api/discovery/enqueue")
 def discovery_enqueue_v301():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.enqueue_discovery_v301(data.get("url"),str(data.get("source") or "manual"),
         data.get("source_ref"),int(data.get("priority") or 50)))
 
 @app.get("/api/discovery/status")
 def discovery_status_api_v301():
     if not _admin_ok_v30(): return _admin_error_v30()
-    return jsonify({"ok":True,**SecurityAnalyzer().discovery_status_v301()})
+    return jsonify({"ok":True,**_analyzer().discovery_status_v301()})
 
 @app.post("/api/discovery/verify")
 def discovery_verify_v301():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.verify_observation_v301(str(data.get("observation_id") or ""),
         str(data.get("label") or ""),str(data.get("family") or "general"),
         str(data.get("verifier") or "analyst"),str(data.get("source") or "analyst"),
@@ -130,7 +116,7 @@ def discovery_verify_v301():
 @app.post("/api/discovery/regression")
 def discovery_regression_v301():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify({"ok":True,**a.continuous_regression_v301(int(data.get("limit") or 2000),
         str(data.get("window_name") or "verified-live"))})
 
@@ -138,7 +124,7 @@ def discovery_regression_v301():
 def evolution_snapshot_v30():
     if not _admin_ok_v30(): return _admin_error_v30()
     data=request.get_json(silent=True) or {}
-    a=SecurityAnalyzer()
+    a=_analyzer()
     snap=a.create_model_snapshot_v30(data.get("weights") or {},data.get("global_metrics") or {},
         data.get("family_metrics") or {},data.get("parent_model_id"),"shadow",
         str(data.get("dataset_fingerprint") or "")[:128],str(data.get("reason") or "candidate"))
@@ -147,14 +133,14 @@ def evolution_snapshot_v30():
 @app.post("/api/evolution/family-guard")
 def evolution_family_guard_v30():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify({"ok":True,"guard":a.evaluate_family_guard_v30(
         data.get("baseline_rows") or [],data.get("candidate_rows") or [],int(data.get("min_family_cases") or 20))})
 
 @app.post("/api/evolution/drift")
 def evolution_drift_v30():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     result=a.detect_concept_drift_v30(data.get("baseline_rows") or [],data.get("current_rows") or [])
     now=datetime.now(timezone.utc).isoformat()
     with db_connect(DB_PATH, timeout=12) as con:
@@ -173,13 +159,13 @@ def evolution_promote_v30():
     guard=data.get("family_guard") or {}
     if not guard.get("pass"):
         return jsonify({"ok":False,"error":"Family guard geçmeden promotion yapılamaz"}),409
-    a=SecurityAnalyzer()
+    a=_analyzer()
     return jsonify(a.promote_model_v30(str(data.get("model_id") or ""),str(data.get("reason") or "verified promotion")))
 
 @app.post("/api/evolution/rollback")
 def evolution_rollback_v30():
     if not _admin_ok_v30(): return _admin_error_v30()
-    data=request.get_json(silent=True) or {}; a=SecurityAnalyzer()
+    data=request.get_json(silent=True) or {}; a=_analyzer()
     return jsonify(a.rollback_model_v30(str(data.get("reason") or "manual rollback"),False))
 
 @app.post("/api/calibration/evaluate")
@@ -191,7 +177,7 @@ def calibration_evaluate_v29():
     rows=data.get("rows") or []
     if not isinstance(rows,list) or not rows:
         return jsonify({"ok":False,"error":"rows gerekli"}),400
-    a=SecurityAnalyzer()
+    a=_analyzer()
     metrics=a.calibration_metrics_v29(rows)
     sensors=a.sensor_error_report_v29(rows)
     proposal=a.propose_calibration_v29(sensors)
@@ -214,7 +200,7 @@ def calibration_compare_v29():
     if not token or request.headers.get("X-Web-Defender-Token","") != token:
         return jsonify({"ok":False,"error":"Yetkisiz"}),401
     data=request.get_json(silent=True) or {}
-    a=SecurityAnalyzer()
+    a=_analyzer()
     base=a.calibration_metrics_v29(data.get("baseline_rows") or [])
     cand=a.calibration_metrics_v29(data.get("candidate_rows") or [])
     gate=a.evaluate_candidate_v29(base,cand,int(data.get("min_cases") or 60))
@@ -328,7 +314,7 @@ def analyze():
         if not url:
             return jsonify({"error": "URL gerekli."}), 400
 
-        analyzer = SecurityAnalyzer()
+        analyzer = _analyzer()
         # V32.3.1.1: feed_off may arrive in JSON (UI/API) or query/form values.
         feed_raw = data.get("feed_off", request.values.get("feed_off", "0"))
         analyzer.feed_off_v3231 = str(feed_raw).lower() in ("1", "true", "yes", "on")

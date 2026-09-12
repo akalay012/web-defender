@@ -6,7 +6,7 @@ from .state import LEARNING_ENGINE, THREAT_INTEL_STORE
 from .intelligence.sync import _ti_loop
 
 APP_NAME="Web Defender"
-APP_VERSION="V34.0.1"
+APP_VERSION="V34.0.2"
 app=Flask(__name__)
 
 @app.after_request
