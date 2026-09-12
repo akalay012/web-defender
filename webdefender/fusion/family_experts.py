@@ -3,6 +3,11 @@
 Experts consume observations/canonical evidence and emit hypotheses. They do
 not own the final EngineDecision.
 """
+from ..analyzer.url_domain import ARCHIVE_EXTENSIONS
+from ..analyzer.url_domain import DANGEROUS_EXTENSIONS
+from ..analyzer.url_domain import SHORTENER_HOSTS
+from ..analyzer.url_domain import full_decode
+from ..guards.pipeline import reject
 import requests
 from ..analyzer.url_domain import host_is_raw_ip
 from ..metadata import APP_VERSION

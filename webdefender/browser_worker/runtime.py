@@ -1,4 +1,5 @@
 """Isolated browser-worker runtime."""
+from ..state import MAX_CONTENT_SIZE
 from ..metadata import USER_AGENT
 from ..analyzer.url_domain import normalize_url
 from ..metadata import RUNNING_ON_PYTHONANYWHERE

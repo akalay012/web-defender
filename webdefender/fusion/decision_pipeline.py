@@ -4,6 +4,8 @@ This mixin owns canonicalization/decision orchestration while pure fusion policy
 remains in fusion.policy. Historical observations are context, not automatic
 current-threat ground truth.
 """
+from ..database import DB_PATH
+from ..database import _ensure_trust_db
 from ..analyzer.url_domain import get_root_domain
 from ..analyzer.url_domain import normalize_url
 from ..metadata import APP_VERSION

@@ -7,6 +7,10 @@ def analyze_url(url, feed_off=True):
 This module owns HTTP presentation and administrative endpoints. It delegates
 analysis to the engine and never recalculates threat scores.
 """
+from ..database import DB_PATH
+from ..database import db_connect
+from ..analyzer.url_domain import registrable_domain_v21
+from ..intelligence.sync import sync_tranco_v21
 import requests
 from ..analyzer.url_domain import normalize_url
 import hashlib, re

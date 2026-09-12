@@ -3,6 +3,9 @@
 Compatibility-era helper services used by the modular orchestrator. These
 helpers do not own HTTP routing or final presentation.
 """
+from ..database import DB_PATH
+from ..database import db_backend_name
+from ..analyzer.url_domain import registrable_domain_v21
 import requests
 from ..metadata import APP_VERSION
 import os, re, json, time, hashlib, math, uuid

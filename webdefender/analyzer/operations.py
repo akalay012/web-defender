@@ -3,6 +3,8 @@
 These subsystems evolve observations and regression knowledge. They do not own
 the final verdict and must never promote the engine's own prediction to ground truth.
 """
+from ..database import DB_PATH
+from ..analyzer.url_domain import registrable_domain_v21
 import requests
 from ..metadata import APP_VERSION
 import csv

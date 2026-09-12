@@ -3,6 +3,11 @@
 These methods gather transport, infrastructure, page-configuration and
 intelligence observations. Configuration weakness is not itself threat proof.
 """
+from ..intelligence.sync import _cache_get
+from ..intelligence.sync import _cache_put
+from ..intelligence.sync import _expiry
+from ..routes.presenter import present
+from ..intelligence.sync import tranco_rank_v21
 from ..metadata import USER_AGENT
 from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION

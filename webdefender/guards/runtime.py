@@ -3,6 +3,7 @@
 Rejected evidence cannot re-enter the pipeline. Context/trust may invalidate an
 impersonation hypothesis but cannot erase independent hard malicious evidence.
 """
+from ..guards.pipeline import reject
 import re, json, hashlib, math
 from urllib.parse import urlparse
 
