@@ -3,6 +3,7 @@
 These methods gather transport, infrastructure, page-configuration and
 intelligence observations. Configuration weakness is not itself threat proof.
 """
+from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION
 import base64, difflib
 import os, re, json, time, ssl, socket, ipaddress, hashlib, math

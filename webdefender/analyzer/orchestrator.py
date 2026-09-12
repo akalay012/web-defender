@@ -3,6 +3,7 @@
 The orchestrator orders sensors, guards, experts and final decision authority.
 It does not redefine their evidence semantics.
 """
+from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION
 import os, re, json, time, hashlib, math, uuid
 from datetime import datetime, timezone, timedelta

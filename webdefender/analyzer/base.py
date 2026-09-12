@@ -1,4 +1,5 @@
 """Analyzer lifecycle and finding collection primitives."""
+from ..metadata import RUNNING_ON_PYTHONANYWHERE
 from ..metadata import APP_VERSION
 import shutil
 import uuid

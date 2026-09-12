@@ -1,4 +1,5 @@
 """Isolated browser-worker runtime."""
+from ..metadata import RUNNING_ON_PYTHONANYWHERE
 import hashlib, io, threading
 import os, sys, re, json, time, socket, ipaddress
 from urllib.parse import urlparse, urljoin

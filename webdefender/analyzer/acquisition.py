@@ -3,6 +3,7 @@
 These methods observe HTTP/browser/content/script surfaces. They do not own the
 final verdict. The mixin is intentionally free of Flask route concerns.
 """
+from ..metadata import RUNNING_ON_PYTHONANYWHERE
 import requests, re, ssl, socket, ipaddress, time, os, json, hashlib, math, uuid, subprocess, sys, tempfile, shutil, difflib, csv, threading, zipfile, io, base64
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
