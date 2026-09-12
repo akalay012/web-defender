@@ -2,101 +2,25 @@ from flask import Flask, request, jsonify, render_template_string
 import requests, re, ssl, socket, ipaddress, time, os, json, sqlite3, hashlib, math, uuid, subprocess, sys, tempfile, shutil, difflib, csv, threading, zipfile, io, base64
 from bs4 import BeautifulSoup
 
-# Embedded DB compatibility layer: Render-safe single-file boot.
-DATABASE_URL=os.getenv("DATABASE_URL","").strip()
-
-def db_backend_name():
-    return "postgresql" if DATABASE_URL else "sqlite"
-
-def _pg_sql(sql):
-    q=str(sql)
-    q=re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b","BIGSERIAL PRIMARY KEY",q,flags=re.I)
-    q=re.sub(r"\bBEGIN\s+IMMEDIATE\b","BEGIN",q,flags=re.I)
-    q=q.replace("?", "%s")
-    # Generic SQLite INSERT OR IGNORE -> PostgreSQL ON CONFLICT DO NOTHING.
-    if re.search(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\b",q,re.I):
-        q=re.sub(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\b","INSERT INTO",q,flags=re.I)
-        q=q.rstrip().rstrip(";")
-        if not re.search(r"\bON\s+CONFLICT\b",q,re.I):
-            q += " ON CONFLICT DO NOTHING"
-    return q
-
-class HybridRow:
-    __slots__=("values","columns","mapping")
-    def __init__(self, values, columns):
-        self.values=tuple(values); self.columns=tuple(columns)
-        self.mapping=dict(zip(self.columns,self.values))
-    def __getitem__(self,key):
-        return self.mapping[key] if isinstance(key,str) else self.values[key]
-    def __iter__(self): return iter(self.values)
-    def __len__(self): return len(self.values)
-    def keys(self): return self.mapping.keys()
-
-class PGCursor:
-    def __init__(self, cur):
-        self._cur=cur
-    @property
-    def rowcount(self): return self._cur.rowcount
-    def _cols(self):
-        return [d.name if hasattr(d,"name") else d[0] for d in (self._cur.description or [])]
-    def fetchone(self):
-        r=self._cur.fetchone()
-        return None if r is None else HybridRow(r,self._cols())
-    def fetchall(self):
-        cols=self._cols()
-        return [HybridRow(r,cols) for r in self._cur.fetchall()]
-    def __iter__(self):
-        cols=self._cols()
-        for r in self._cur: yield HybridRow(r,cols)
-
-class PGConnection:
-    def __init__(self, con):
-        self._con=con
-        self.row_factory=None  # sqlite compatibility; HybridRow is always dual-access.
-    def execute(self, sql, params=()):
-        cur=self._con.cursor()
-        cur.execute(_pg_sql(sql), tuple(params or ()))
-        return PGCursor(cur)
-    def executemany(self, sql, seq):
-        cur=self._con.cursor()
-        cur.executemany(_pg_sql(sql), seq)
-        return PGCursor(cur)
-    def commit(self): return self._con.commit()
-    def rollback(self): return self._con.rollback()
-    def close(self): return self._con.close()
-    def __enter__(self): return self
-    def __exit__(self, typ, val, tb):
-        if typ is None: self._con.commit()
-        else: self._con.rollback()
-        self._con.close()
-        return False
-
-def db_connect(sqlite_path=None, timeout=8):
-    if not DATABASE_URL:
-        return sqlite3.connect(sqlite_path or "web_defender.db", timeout=timeout)
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("DATABASE_URL ayarlı ancak psycopg kurulu değil") from exc
-    con=psycopg.connect(DATABASE_URL, connect_timeout=max(1,int(timeout)))
-    return PGConnection(con)
+# Database compatibility is owned by webdefender.database.
+from .database import DATABASE_URL, db_backend_name, db_connect, HybridRow, PGCursor, PGConnection
 
 
-try:
-    import tldextract
-    _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
-except Exception:
-    _TLD_EXTRACT = None
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, urljoin, parse_qsl, unquote_plus, unquote, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
+from .analyzer.url_domain import (
+    normalize_url, host_is_private, host_is_raw_ip, resolve_public_ips,
+    read_limited_response, same_origin, severity_weight, full_decode,
+    get_canonical_root, get_root_domain, registrable_domain_v21,
+)
 
 app = Flask(__name__)
 
 APP_NAME = "Web Defender"
-APP_VERSION = "V32.5.0"
-# V32.4.2 Architecture: Sensors → Raw Observations → Guards → Canonical Evidence Bus
+APP_VERSION = "V32.5.1"
+# Modular architecture invariant: Sensors → Raw Observations → Guards → Canonical Evidence Bus
 #   → Family Experts → ONE Fusion → ONE Decision Authority → UI
 # Changes vs V32.4.1:
 #   - calculate_scores no longer independently derives threat score (defers to canonical authority)
@@ -117,7 +41,6 @@ REQUEST_TIMEOUT = 15
 MAX_CONTENT_SIZE = 5 * 1024 * 1024
 MAX_REDIRECTS = 8
 DB_PATH = os.getenv("WEB_DEFENDER_DB", "/var/data/web_defender.db" if os.path.isdir("/var/data") else "web_defender.db")
-COMMON_MULTI_SUFFIXES = {"com.tr", "net.tr", "org.tr", "gov.tr", "edu.tr", "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "co.jp"}
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
@@ -554,104 +477,14 @@ def _ti_loop():
 
 # ── Yardımcı fonksiyonlar ─────────────────────────────────────────────────
 
-def normalize_url(url):
-    url = (url or "").strip()
-    if not url:
-        raise ValueError("URL boş.")
-    if not re.match(r"^https?://", url, re.I):
-        url = "https://" + url
-    p = urlparse(url)
-    if p.scheme not in ("http", "https") or not p.hostname:
-        raise ValueError("Geçersiz HTTP/HTTPS URL.")
-    if len(url) > 4096:
-        raise ValueError("URL çok uzun.")
-    return url
 
-def host_is_private(host):
-    if not host:
-        return True
-    h = host.lower().rstrip(".")
-    if h in {"localhost", "localhost.localdomain", "metadata",
-             "metadata.google.internal", "169.254.169.254"}:
-        return True
-    try:
-        ip = ipaddress.ip_address(h)
-        return (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_multicast or ip.is_reserved)
-    except ValueError:
-        return False
 
-def host_is_raw_ip(host):
-    if not host:
-        return False
-    try:
-        ipaddress.ip_address(host)
-        return True
-    except ValueError:
-        return False
 
-def _legacy_root_domain_fallback(hostname):
-    """Fallback parser used only when PSL extraction is unavailable."""
-    if not hostname:
-        return ""
-    host = hostname.lower().rstrip(".")
-    if host_is_raw_ip(host):
-        return host
-    parts = host.split(".")
-    if len(parts) <= 2:
-        return host
-    suffix2 = ".".join(parts[-2:])
-    if suffix2 in COMMON_MULTI_SUFFIXES and len(parts) >= 3:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:])
 
-def resolve_public_ips(host):
-    """Hostun yalnızca public IP'lere çözümlendiğini doğrular."""
-    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    ips = list(dict.fromkeys(i[4][0] for i in infos))
-    if not ips:
-        raise ValueError("DNS çözümlemesi IP döndürmedi.")
-    for raw in ips:
-        ip = ipaddress.ip_address(raw)
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or
-                ip.is_multicast or ip.is_reserved or ip.is_unspecified):
-            raise ValueError(f"Private/özel IP hedefi engellendi: {raw}")
-    return ips
 
-def read_limited_response(response, limit=MAX_CONTENT_SIZE):
-    """Response gövdesini belleğe sınırsız almadan limitli okur."""
-    chunks, total = [], 0
-    for chunk in response.iter_content(chunk_size=65536):
-        if not chunk:
-            continue
-        remaining = limit - total
-        if remaining <= 0:
-            break
-        chunks.append(chunk[:remaining])
-        total += min(len(chunk), remaining)
-        if total >= limit:
-            break
-    return b"".join(chunks)
 
-def same_origin(a, b):
-    pa, pb = urlparse(a), urlparse(b)
-    pa_port = pa.port or (443 if pa.scheme == "https" else 80)
-    pb_port = pb.port or (443 if pb.scheme == "https" else 80)
-    return pa.scheme == pb.scheme and pa.hostname == pb.hostname and pa_port == pb_port
 
-def severity_weight(sev):
-    return {"critical": 40, "high": 25, "medium": 12, "low": 4, "info": 0}.get(sev, 0)
 
-def full_decode(s):
-    """Çok katmanlı URL encoding'i tamamen çöz."""
-    seen = set()
-    while s not in seen:
-        seen.add(s)
-        decoded = unquote_plus(s)
-        if decoded == s:
-            break
-        s = decoded
-    return s
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -663,29 +496,8 @@ _RDAP_BOOTSTRAP = {"loaded_at": 0.0, "services": []}
 # V32.4.2: Canonical single PSL resolver. Always use this for cross-root comparisons.
 # get_root_domain() (manual suffix list) and registrable_domain_v21() (tldextract when
 # available) could diverge. get_canonical_root() is the single source of truth.
-def get_canonical_root(host):
-    """Single authoritative registrable-domain resolver.
-    Uses tldextract when available; falls back to manual suffix list.
-    Always use this for identity, cross-root exfil and destination ownership checks.
-    """
-    host = (host or "").strip(".").lower()
-    if not host or host_is_raw_ip(host): return host
-    if _TLD_EXTRACT:
-        try:
-            x = _TLD_EXTRACT(host)
-            result = ".".join(p for p in (x.domain, x.suffix) if p)
-            if result: return result
-        except Exception:
-            pass
-    return _legacy_root_domain_fallback(host)
 
-def get_root_domain(host):
-    """Compatibility wrapper: all legacy callers use the canonical PSL authority."""
-    return get_canonical_root(host)
 
-def registrable_domain_v21(host):
-    """Compatibility wrapper for V21 callers; never a second parser."""
-    return get_canonical_root(host)
 
 def _trust_db_init():
     with db_connect(DB_PATH, timeout=15) as con:
